@@ -55,7 +55,7 @@ export function scatter(patch: Grid) {
     const glacier = glacierness(x, y, z) * cover;
 
     // Subalpine fir and mountain hemlock in clumps across the Paradise meadows.
-    if (trees.matrices.length < 700 && y < 1950 && cover < 0.3 && s.deg < 34 && track > 5
+    if (trees.matrices.length < 1400 && y < 1950 && cover < 0.3 && s.deg < 34 && track > 5
       && fbm(x * 0.012 + 7, z * 0.012 - 3) > 0.52 - (1750 - y) / 1500 && rand() < 0.95) {
       const hgt = (5 + rand() * 12) * (1 - smooth01((y - 1700) / 250) * 0.55);
       q.setFromEuler(new THREE.Euler(0, rand() * Math.PI * 2, 0));
@@ -213,18 +213,29 @@ function merge(parts: { geo: THREE.BufferGeometry; color: [number, number, numbe
 /** A subalpine fir: a narrow spire of drooping tiers on a short trunk. Unit height. */
 export function treeGeometry() {
   const parts: { geo: THREE.BufferGeometry; color: [number, number, number] }[] = [];
-  const trunk = new THREE.CylinderGeometry(0.018, 0.03, 0.25, 6);
-  trunk.translate(0, 0.12, 0);
-  parts.push({ geo: trunk, color: [0.12, 0.08, 0.05] });
-  const tiers = 6;
+  const trunk = new THREE.CylinderGeometry(0.012, 0.028, 0.3, 7);
+  trunk.translate(0, 0.14, 0);
+  parts.push({ geo: trunk, color: [0.1, 0.07, 0.05] });
+  // Many short, drooping whorls on a narrow spire, with a ragged outline.
+  const tiers = 11;
   for (let i = 0; i < tiers; i++) {
     const t = i / tiers;
-    const r = 0.2 * (1 - t) + 0.03;
-    const h = 0.32 * (1 - t * 0.5);
-    const cone = new THREE.ConeGeometry(r, h, 9, 1, true);
-    cone.translate(0, 0.16 + t * 0.78 + h / 2, 0);
-    const g = 0.09 + 0.03 * ((i * 37) % 5) / 5;
-    parts.push({ geo: cone, color: [g * 0.45, g, g * 0.6] });
+    const r = 0.17 * Math.pow(1 - t, 0.9) + 0.02;
+    const h = 0.16 * (1 - t * 0.35);
+    const cone = new THREE.ConeGeometry(r, h, 12, 2, true);
+    const pos = cone.attributes.position as THREE.BufferAttribute;
+    for (let v = 0; v < pos.count; v++) {
+      const x = pos.getX(v);
+      const z = pos.getZ(v);
+      const y = pos.getY(v);
+      const rim = y < -h * 0.2 ? 1 : 0;
+      const jag = 1 + (Math.sin(Math.atan2(z, x) * 7 + i * 1.7) * 0.18) * rim;
+      // Branch tips droop below the whorl.
+      pos.setXYZ(v, x * jag, y - rim * r * 0.25, z * jag);
+    }
+    cone.translate(0, 0.12 + t * 0.86 + h / 2, 0);
+    const g = 0.07 + 0.035 * (((i * 37) % 5) / 5);
+    parts.push({ geo: cone, color: [g * 0.42, g, g * 0.62] });
   }
   return merge(parts);
 }

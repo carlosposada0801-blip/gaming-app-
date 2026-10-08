@@ -78,11 +78,13 @@ export function detailTextures() {
   return cached;
 }
 
-let clouds: THREE.DataTexture | null = null;
+const clouds = new Map<string, THREE.DataTexture>();
 
-/** Soft, tileable cumulus tops: white with alpha from billowing noise. */
-export function cloudTexture() {
-  if (clouds) return clouds;
+/** Soft, tileable cloud: white with alpha from billowing noise. Higher `from` = more open sky. */
+export function cloudTexture(from = 0.36, span = 0.22) {
+  const key = `${from}:${span}`;
+  const hit = clouds.get(key);
+  if (hit) return hit;
   const n = SIZE;
   const data = new Uint8Array(n * n * 4);
   for (let y = 0; y < n; y++) {
@@ -95,18 +97,77 @@ export function cloudTexture() {
         amp *= 0.5;
         p *= 2;
       }
-      const a = Math.max(0, Math.min(1, (f - 0.36) / 0.22));
+      const a = Math.max(0, Math.min(1, (f - from) / span));
       const i = (y * n + x) * 4;
       const shade = Math.round(215 + 40 * a);
       data[i] = data[i + 1] = data[i + 2] = shade;
       data[i + 3] = Math.round(a * 255);
     }
   }
-  clouds = new THREE.DataTexture(data, n, n, THREE.RGBAFormat, THREE.UnsignedByteType);
-  clouds.wrapS = clouds.wrapT = THREE.RepeatWrapping;
-  clouds.magFilter = THREE.LinearFilter;
-  clouds.minFilter = THREE.LinearMipmapLinearFilter;
-  clouds.generateMipmaps = true;
-  clouds.needsUpdate = true;
-  return clouds;
+  const tex = new THREE.DataTexture(data, n, n, THREE.RGBAFormat, THREE.UnsignedByteType);
+  tex.wrapS = tex.wrapT = THREE.RepeatWrapping;
+  tex.magFilter = THREE.LinearFilter;
+  tex.minFilter = THREE.LinearMipmapLinearFilter;
+  tex.generateMipmaps = true;
+  tex.needsUpdate = true;
+  clouds.set(key, tex);
+  return tex;
+}
+
+let grass: THREE.DataTexture | null = null;
+
+/** A card of grass blades with seed heads: transparent between blades, darker at the base. */
+export function grassTexture() {
+  if (grass) return grass;
+  const W = 128;
+  const H = 256;
+  const data = new Uint8Array(W * H * 4);
+  let seed = 12345;
+  const rand = () => {
+    seed = (seed * 16807) % 2147483647;
+    return seed / 2147483647;
+  };
+  for (let b = 0; b < 70; b++) {
+    // Blades bunch toward the middle of the card and shorten toward its sides, so a clump has
+    // a rounded, ragged outline instead of a rectangle.
+    const off = ((rand() + rand() + rand()) / 3 - 0.5) * 2;
+    const x0 = W / 2 + off * (W / 2 - 6);
+    const height = (0.3 + rand() * 0.7) * (1 - Math.abs(off) * 0.6) * H;
+    const lean = (rand() - 0.5) * 50;
+    const width = 1.4 + rand() * 2.2;
+    const hue = rand();
+    for (let y = 0; y < height; y++) {
+      const t = y / height;
+      const cx = x0 + lean * t * t;
+      const half = width * (1 - t) + 0.35;
+      for (let x = Math.floor(cx - half); x <= Math.ceil(cx + half); x++) {
+        if (x < 0 || x >= W) continue;
+        const i = (y * W + x) * 4;
+        // Dark at the base, sunlit toward the tip; a few blades already curing to straw.
+        const light = 0.35 + 0.65 * t;
+        const straw = hue > 0.82 ? 1 : 0;
+        data[i] = Math.round((60 + straw * 90 + 40 * t) * light);
+        data[i + 1] = Math.round((110 + straw * 60 + 60 * t) * light);
+        data[i + 2] = Math.round((40 + straw * 10) * light);
+        data[i + 3] = 255;
+      }
+    }
+    // Seed head on some stems.
+    if (rand() < 0.25) {
+      const cx = Math.round(x0 + lean);
+      for (let y = Math.floor(height) - 14; y < height + 2 && y < H; y++) {
+        for (let x = cx - 2; x <= cx + 2; x++) {
+          if (x < 0 || x >= W || y < 0) continue;
+          const i = (y * W + x) * 4;
+          data[i] = 150; data[i + 1] = 135; data[i + 2] = 80; data[i + 3] = 255;
+        }
+      }
+    }
+  }
+  grass = new THREE.DataTexture(data, W, H, THREE.RGBAFormat, THREE.UnsignedByteType);
+  grass.magFilter = THREE.LinearFilter;
+  grass.minFilter = THREE.LinearMipmapLinearFilter;
+  grass.generateMipmaps = true;
+  grass.needsUpdate = true;
+  return grass;
 }

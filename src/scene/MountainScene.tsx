@@ -5,9 +5,10 @@ import { Climber, type ClimberLook, type Motion } from './Climber';
 import { crevasseGeometry, rockGeometry, scatter, seracGeometry, treeGeometry, type Instances } from './features';
 import {
   CORE_MESH, FAR, HORIZON, PATCH_HALF, ROUTE, ROUTE_SPACING, SUMMIT_POS, buildPatch, currentPatch, earthDrop, groundColor,
-  inside, nodePosition, surfaceAt, type Grid, type Vec3,
+  inside, nodePosition, slopeAt, snowCover, surfaceAt, type Grid, type Vec3,
 } from './terrain';
-import { cloudTexture, detailTextures } from './textures';
+import { cloudTexture, detailTextures, grassTexture } from './textures';
+import { flowerGeometry, grassGeometry, meadowScatter, swaying, tickWind } from './vegetation';
 import { minuteOfDay } from '../game/route';
 import type { Weather } from '../game/types';
 
@@ -128,6 +129,26 @@ function StaticTerrain() {
   );
 }
 
+/** Fair-weather cumulus drifting high over the Cascades. */
+function SkyClouds({ amount }: { amount: React.MutableRefObject<number> }) {
+  const mat = useMemo(() => {
+    const t = cloudTexture(0.56, 0.14);
+    t.repeat.set(3, 3);
+    return new THREE.MeshBasicMaterial({ color: '#f3f5f8', map: t, transparent: true, depthWrite: false, side: THREE.DoubleSide });
+  }, []);
+  const mesh = useRef<THREE.Mesh>(null);
+  useFrame((st) => {
+    mat.opacity = amount.current;
+    if (mat.map) mat.map.offset.set(st.clock.elapsedTime * 0.0012, st.clock.elapsedTime * 0.0004);
+    if (mesh.current) mesh.current.visible = amount.current > 0.02;
+  });
+  return (
+    <mesh ref={mesh} rotation={[Math.PI / 2, 0, 0]} position={[0, 7200, 0]} material={mat}>
+      <planeGeometry args={[160000, 160000, 1, 1]} />
+    </mesh>
+  );
+}
+
 /** A sea of cloud filling the lowlands on clear mornings, with the Cascade volcanoes poking through. */
 function CloudSea({ amount }: { amount: React.MutableRefObject<number> }) {
   const mat = useMemo(() => {
@@ -162,6 +183,8 @@ const ROCK_GEO = rockGeometry();
 const SERAC_GEO = seracGeometry();
 const CREVASSE_GEO = crevasseGeometry();
 const TREE_GEO = treeGeometry();
+const GRASS_GEO = grassGeometry();
+const FLOWER_GEO = flowerGeometry();
 
 /** High-detail ground, boulders, seracs and crevasses around the climber. */
 function DetailPatch({ patch }: { patch: Grid }) {
@@ -169,7 +192,15 @@ function DetailPatch({ patch }: { patch: Grid }) {
   const geo = useMemo(() => terrainGeometry(patch), [patch]);
   const objects = useMemo(() => {
     const { rocks, seracs, crevasses, trees } = scatter(patch);
-    const treeMesh = makeInstanced(TREE_GEO, new THREE.MeshStandardMaterial({ vertexColors: true, roughness: 0.95 }), trees);
+    const treeMesh = makeInstanced(TREE_GEO, swaying(new THREE.MeshStandardMaterial({ vertexColors: true, roughness: 0.95 }), 0.02), trees);
+    const { grass, flowers } = meadowScatter(patch);
+    const grassMesh = makeInstanced(
+      GRASS_GEO,
+      swaying(new THREE.MeshStandardMaterial({ map: grassTexture(), alphaTest: 0.45, roughness: 0.95 }), 0.07),
+      grass,
+    );
+    grassMesh.receiveShadow = true;
+    const flowerMesh = makeInstanced(FLOWER_GEO, swaying(new THREE.MeshStandardMaterial({ vertexColors: true, roughness: 0.7 }), 0.07), flowers);
     treeMesh.castShadow = true;
     treeMesh.receiveShadow = true;
     const rockMesh = makeInstanced(ROCK_GEO, new THREE.MeshStandardMaterial({ roughness: 0.95, flatShading: true }), rocks);
@@ -188,7 +219,7 @@ function DetailPatch({ patch }: { patch: Grid }) {
       crevasses,
     );
     crevMesh.receiveShadow = true;
-    return [rockMesh, seracMesh, crevMesh, treeMesh];
+    return [rockMesh, seracMesh, crevMesh, treeMesh, grassMesh, flowerMesh];
   }, [patch]);
   useEffect(() => () => {
     geo.dispose();
@@ -204,27 +235,34 @@ function DetailPatch({ patch }: { patch: Grid }) {
 
 // ---------- route, wands, camps ----------
 
-const TRACK = new THREE.Color('#6b6f78');
 
 function RouteTrack({ highlight }: { highlight: React.MutableRefObject<number> }) {
-  // A flat, trampled strip pressed into the snow, half a meter wide.
+  // The trail: packed brown dirt through the meadows, a trampled boot track on snow.
   const track = useMemo(() => {
-    const W = 0.32;
     const sub = 3;
     const positions: number[] = [];
+    const colors: number[] = [];
+    const DIRT = [0.24, 0.18, 0.12];
+    const BOOT = [0.42, 0.44, 0.5];
     const index: number[] = [];
     const pts = ROUTE.pts;
     for (let i = 0; i < pts.length - 1; i++) {
       const [ax, , az] = pts[i];
       const [bx, , bz] = pts[i + 1];
       const len = Math.hypot(bx - ax, bz - az) || 1;
+      const ay = surfaceAt(ax, az);
+      const s = slopeAt(ax, az);
+      const snow = snowCover(ax, ay, az, s.deg, s.north);
+      const W = 0.32 + (1 - snow) * 0.45;
       const sx = (-(bz - az) / len) * W;
       const sz = ((bx - ax) / len) * W;
+      const c = DIRT.map((d, k) => d + (BOOT[k] - d) * snow);
       for (let k = 0; k < sub; k++) {
         const t = k / sub;
         const x = ax + (bx - ax) * t;
         const z = az + (bz - az) * t;
         positions.push(x + sx, surfaceAt(x + sx, z + sz) + 0.04, z + sz, x - sx, surfaceAt(x - sx, z - sz) + 0.04, z - sz);
+        colors.push(...c, ...c);
       }
     }
     for (let j = 0; j < positions.length / 6 - 1; j++) {
@@ -233,6 +271,7 @@ function RouteTrack({ highlight }: { highlight: React.MutableRefObject<number> }
     }
     const g = new THREE.BufferGeometry();
     g.setAttribute('position', new THREE.Float32BufferAttribute(positions, 3));
+    g.setAttribute('color', new THREE.Float32BufferAttribute(colors, 3));
     g.setIndex(index);
     g.computeVertexNormals();
     return g;
@@ -253,10 +292,10 @@ function RouteTrack({ highlight }: { highlight: React.MutableRefObject<number> }
     <>
       <mesh geometry={track} receiveShadow>
         <meshStandardMaterial
-          color={TRACK}
+          vertexColors
           roughness={1}
           transparent
-          opacity={0.26}
+          opacity={0.7}
           depthWrite={false}
           side={THREE.DoubleSide}
           polygonOffset
@@ -573,6 +612,7 @@ function World(props: SceneProps) {
   const horizon = useMemo(() => new THREE.Color(SKY_DAY), []);
   const fog = useMemo(() => new THREE.FogExp2(SKY_DAY.getHex(), 0.00001), []);
   const clouds = useRef(0);
+  const cumulus = useRef(0);
 
   const follow = props.mode === 'follow';
   const [patch, setPatch] = useState<Grid | null>(() => {
@@ -609,8 +649,9 @@ function World(props: SceneProps) {
     return new THREE.Vector3(x, surfaceAt(x, z), z);
   };
 
-  useFrame((_, rawDt) => {
+  useFrame((st, rawDt) => {
     const dt = Math.min(rawDt, 0.1);
+    tickWind(st.clock.elapsedTime);
     const p = latest.current;
     const target = ROUTE.nodeIndex[p.node];
 
@@ -700,6 +741,9 @@ function World(props: SceneProps) {
     const settled = p.weather === 'clear' || p.weather === 'coldsnap' ? 1 : p.weather === 'windy' ? 0.5 : 0;
     const morning = mod > 5 && mod < 13 ? 1 - Math.max(0, mod - 10) / 3 : 0.35;
     clouds.current += (settled * morning * 0.95 * Math.max(0.25, day) - clouds.current) * Math.min(1, dt);
+    // Afternoon cumulus build over the range; none in a whiteout (you're inside the cloud).
+    const build = p.weather === 'clear' ? 0.55 + 0.3 * Math.max(0, Math.min(1, (mod - 10) / 5)) : p.weather === 'windy' ? 0.8 : 0;
+    cumulus.current += (build * Math.max(0.15, day) - cumulus.current) * Math.min(1, dt);
 
     if (sun.current) {
       const m = minuteOfDay(p.clock);
@@ -804,6 +848,7 @@ function World(props: SceneProps) {
       <RouteTrack highlight={routeHighlight} />
       <RouteMarkers wands={props.wands} patchId={patch ? patch.cx * 1e5 + patch.cz : 0} />
       <CloudSea amount={clouds} />
+      <SkyClouds amount={cumulus} />
       <Snowfall intensity={snow} center={camTarget} />
       <group ref={climber}>
         <Climber look={props.look} motion={motion} />

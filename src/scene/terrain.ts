@@ -268,6 +268,10 @@ export function groundColor(x: number, y: number, z: number, slopeDeg: number, n
   bare = mix3(bare, ROCK_DARK, smooth(0.45, 0.8, f) * 0.6);
   bare = mix3(bare, ROCK_RED, smooth(0.58, 0.75, fbm(x * 0.002 + 40, z * 0.002 - 13)) * 0.75);
   bare = mix3(bare, ROCK_DARK, smooth(35, 55, slopeDeg) * 0.55);
+  // Lava-flow strata: on cliffs the rock shows near-horizontal bands, red-brown and grey.
+  const band = Math.sin(y * 0.09 + fbm(x * 0.003, z * 0.003) * 9) * 0.5 + 0.5;
+  const cliff = smooth(30, 48, slopeDeg) * smooth(1800, 2300, y);
+  bare = mix3(bare, band > 0.6 ? ROCK_RED : ROCK_DARK, cliff * Math.abs(band - 0.5) * 1.1);
   // Paradise sits in subalpine meadow; dense forest only lower down.
   const green = mix3(FOREST, MEADOW, smooth(1350, 1600, y) * (0.55 + 0.45 * smooth(0.3, 0.6, n)));
   let c = mix3(bare, green, (1 - smooth(treeline - 60, treeline + 60, y)) * (1 - smooth(32, 42, slopeDeg)));

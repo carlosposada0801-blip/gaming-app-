@@ -37,9 +37,15 @@ See AGENTS.md for Expo rules (use `npx expo install`, check versioned docs).
   Flats, Cleaver, High Break, crater rim, Columbia Crest). Ground color from elevation, slope,
   aspect: meadow, pumice, rock, July snowline, firn, glacier ice.
 - `src/scene/features.ts`: boulders on bare ground, seracs where glaciers steepen, crevasse slots
-  across the slope, all kept off the boot track. `textures.ts`: tileable grain and normal maps.
-- `src/scene/Climber.tsx`: climber built from rounded primitives (scaled to 1.8 m in the scene);
-  shows helmet, glasses, headlamp, axe, poles, crampons, harness, rope coil, pack size; walk animation.
+  across the slope, subalpine fir clumps in the meadows, all kept off the trail. `textures.ts`:
+  tileable grain and normal maps, cloud alpha, grass blade cards.
+- `src/scene/vegetation.ts`: meadow within 75 m of the stop: ~12k grass clumps (alpha-tested cards,
+  wind sway in the vertex shader) and drifts of magenta / scarlet paintbrush, lupine, avalanche lily
+  and cinquefoil. Trail is brown dirt off snow, a grey boot track on snow.
+- `src/scene/Climber.tsx`: a real human skeleton with motion-capture Walk / Idle clips
+  (`data/climberRig.ts`, from `tools/character/`), dressed in clothing and gear built around the
+  bones: down or shell jacket, hardshell pants, boots, crampons, mitts, buff, helmet, glasses,
+  headlamp, harness, pack, rope, axe, poles.
 - `src/scene/MountainScene.tsx`: terrain layers, detail patch and features, flat boot track,
   wands, Camp Muir (huts, tents) and Paradise Inn, Adams / St. Helens / Hood on the horizon,
   gradient sky with sun, stars, snowfall, time-of-day light and haze, starlight and headlamp at
