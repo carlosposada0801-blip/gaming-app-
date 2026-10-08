@@ -37,30 +37,26 @@ See AGENTS.md for Expo rules (use `npx expo install`, check versioned docs).
 - `src/ui/theme.ts`: palette, `climberLook(state)`, `partnerLook(state)`, `statColor`.
 - `src/ui/PackScreen.tsx`: gear packing screen with weights and a "guide's list" button.
 
-## Still to build
-1. `src/ui/TitleScreen.tsx`: MountainScene in `mode="orbit"` behind a title, best score from
-   AsyncStorage, "Pack your gear" button.
-2. `src/ui/ClimbScreen.tsx`:
-   - MountainScene (top ~55% of screen, `mode="follow"`), with a transparent PanResponder
-     overlay: horizontal drag changes `control.yaw`, vertical drag changes `control.dist`
-     (clamp 2.5 to 14). A button toggles `control.overview` (route view vs climber view).
-   - HUD over the scene: location + elevation (`formatFt`), clock + day + weather.
-   - Six stat bars (altitude/AMS is inverted: high is bad) and a warmth trend label
-     from `warmthTrend` ("cold" / "sweating").
-   - Last outcome text (`state.lastOutcome`), node description, action buttons from
-     `listActions` (primary action large), disabled reason from `moveBlockedReason`.
-   - Event sheet when `state.pendingEvent` is set: title, `text(state)`, choices from
-     `eventChoices` (disabled ones show their `hint`, e.g. "Needs an ice axe").
-   - Collapsible "Field notes" list from `state.log`.
-   - Haptics: warning when an event appears, success on summit, error on bad outcomes.
-3. `src/ui/EndScreen.tsx`: ending title/body/lesson from `ENDINGS`, `computeScore`,
-   time on route, highest point reached, `gearReview(packed)` tips, "Climb again"
-   (back to pack screen keeping the previous list). Save best score to AsyncStorage.
-4. `App.tsx`: SafeAreaProvider, screen state ('title' | 'pack' | 'climb' | 'end'),
-   dark StatusBar, holds `packed` and `GameState`.
-5. Set `app.json` name to "Summit Rainier", `userInterfaceStyle: "dark"`, portrait.
-6. Verify: `npx tsc --noEmit`, `npx expo export --platform ios` and `--platform android`
-   to confirm it bundles, then test on a phone with Expo Go (`npx expo start`).
+- `src/ui/TitleScreen.tsx`: orbiting mountain behind the title, best score, "Pack your gear".
+- `src/ui/ClimbScreen.tsx`: follow-cam scene (top 55%) with drag to orbit/zoom and a route-view
+  toggle, HUD (location, elevation, clock, day, weather), six stat bars with warmth trend,
+  last outcome, node description, actions from `listActions`, event sheet with disabled-choice
+  hints, ending card, collapsible field notes, haptics (warning on events, success on summit,
+  error on bad outcomes).
+- `src/ui/EndScreen.tsx`: ending title/body/lesson, score (with "New best"), time on route,
+  high point, gear review tips, "Climb again" (keeps the packed list) and "Title".
+- `src/ui/storage.ts`: best score in AsyncStorage.
+- `App.tsx`: SafeAreaProvider, screen state machine, light status bar text on the dark UI.
+- `app.json`: "Summit Rainier", dark, portrait, iPhone only, bundle ID / package
+  `com.carlosposada.summitrainier`.
+- Verified: `npx tsc --noEmit`, `npx expo export --platform ios` and `--platform android`
+  bundle cleanly; a web build was clicked through title → pack → climb → event → ending → debrief.
+
+## Still to do
+1. Test on a real phone with Expo Go (`npx expo start`) and tune touch/camera feel.
+2. `npx expo lint` (first run sets up ESLint; it needs network access to Expo's servers).
+3. App Store: `npx eas-cli@latest build --platform ios`, then `npx eas-cli@latest submit --platform ios`
+   (needs an Apple Developer account).
 
 ## Design
 Alpine-start palette in `src/ui/theme.ts`: pre-dawn slate background, glacier-ice blue

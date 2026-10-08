@@ -482,7 +482,7 @@ export function eventChoices(s: GameState) {
 export function chooseEvent(prev: GameState, index: number, rng: Rng = Math.random): GameState {
   if (!prev.pendingEvent) return prev;
   const s = clone(prev);
-  const def = EVENT_BY_ID[s.pendingEvent];
+  const def = EVENT_BY_ID[prev.pendingEvent];
   const choice = def.choices(s)[index];
   if (!choice || choice.disabled) return prev;
   const outcome: Outcome = choice.resolve(s, rng);
