@@ -1,6 +1,6 @@
 # Whiteout Ridge
 
-A mountain-ascent survival game. Climb from Base Camp (5,000 m) to the summit (8,000 m) while managing health, stamina, warmth and oxygen against rockfall, storms, nightfall and the death zone.
+A 3D mountain-ascent survival game built with three.js. Climb from Base Camp (5,000 m) to the summit (8,000 m) while managing health, stamina, warmth and oxygen against rockfall, storms, nightfall and the death zone.
 
 Open `index.html` in a browser. No build step or dependencies.
 

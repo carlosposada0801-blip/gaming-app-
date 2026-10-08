@@ -70,7 +70,7 @@ body {
 @keyframes blink { 50% { opacity: .35; } }
 
 /* Stage */
-.stage { position: relative; min-height: 0; border-radius: 6px; overflow: hidden; background: var(--slate); touch-action: none; }
+.stage { position: relative; min-height: 0; border-radius: 6px; overflow: hidden; background: linear-gradient(to bottom, #3b4a7a, #f0a07a 75%); touch-action: none; }
 canvas { display: block; position: absolute; inset: 0; }
 .toast { position: absolute; left: 50%; top: 12px; transform: translateX(-50%); background: rgba(12, 20, 36, .86); border: 1px solid var(--line); padding: 6px 12px; border-radius: 3px; font-family: var(--mono); font-size: .78rem; white-space: nowrap; max-width: calc(100% - 24px); overflow: hidden; text-overflow: ellipsis; opacity: 0; transition: opacity .25s; pointer-events: none; }
 .toast.on { opacity: 1; }
@@ -188,6 +188,7 @@ button:focus-visible { outline: 2px solid var(--o2); outline-offset: 2px; }
   </nav>
 </div>
 
+<script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
 <script>
 (() => {
   'use strict';
@@ -201,16 +202,16 @@ button:focus-visible { outline: 2px solid var(--o2); outline-offset: 2px; }
   const CAMP_EVERY = 25;                                  // a camp every 500 m
   const DEATH_ZONE = 7500;
   const SEC_PER_MIN = 0.3;                                 // one in-game minute per 0.3 s
-  const START_MIN = 5 * 60;
+  const START_MIN = 6 * 60;
   const CAMP_NAMES = ['Base Camp', 'Camp I', 'Camp II', 'Camp III', 'Camp IV', 'Camp V'];
   const BEST_KEY = 'whiteout-ridge-best';
 
   const $ = id => document.getElementById(id);
   const canvas = $('view');
-  const ctx = canvas.getContext('2d');
+  const stage = $('stage');
   const reduceMotion = window.matchMedia('(prefers-reduced-motion: reduce)').matches;
 
-  let W = 0, H = 0, cell = 40, faceX = 0;
+  let W = 0, H = 0;
 
   // ---- Helpers ------------------------------------------------------------
   const clamp = (v, a, b) => Math.max(a, Math.min(b, v));
@@ -231,11 +232,6 @@ button:focus-visible { outline: 2px solid var(--o2); outline-offset: 2px; }
     h = Math.imul(h ^ (h >>> 13), 1274126177);
     return ((h ^ (h >>> 16)) >>> 0) / 4294967296;
   }
-  function hexToRgb(h) { const n = parseInt(h.slice(1), 16); return [n >> 16, (n >> 8) & 255, n & 255]; }
-  function mix(a, b, t) {
-    const x = hexToRgb(a), y = hexToRgb(b);
-    return `rgb(${Math.round(lerp(x[0], y[0], t))},${Math.round(lerp(x[1], y[1], t))},${Math.round(lerp(x[2], y[2], t))})`;
-  }
   function loadBest() { try { return JSON.parse(localStorage.getItem(BEST_KEY)) || null; } catch (e) { return null; } }
   function saveBest(b) { try { localStorage.setItem(BEST_KEY, JSON.stringify(b)); } catch (e) { /* storage unavailable */ } }
 
@@ -244,6 +240,7 @@ button:focus-visible { outline: 2px solid var(--o2); outline-offset: 2px; }
   let best = loadBest();
 
   function newGame() {
+    if (renderer) clearWorldMeshes();
     const seed = (Math.random() * 2 ** 32) >>> 0;
     g = {
       rng: mulberry32(seed),
@@ -336,17 +333,6 @@ button:focus-visible { outline: 2px solid var(--o2); outline-offset: 2px; }
     [8, '#3f7fc4', '#bcd7ec'], [16, '#3f7fc4', '#bcd7ec'], [18, '#3a4f86', '#f39a5b'],
     [19.5, '#141c38', '#3a2f55'], [24, '#050a18', '#0d1630'],
   ];
-  function skyColors(h) {
-    for (let i = 0; i < SKY.length - 1; i++) {
-      const a = SKY[i], b = SKY[i + 1];
-      if (h >= a[0] && h <= b[0]) {
-        const t = (h - a[0]) / (b[0] - a[0]);
-        return [mix(a[1], b[1], t), mix(a[2], b[2], t)];
-      }
-    }
-    return [SKY[0][1], SKY[0][2]];
-  }
-
   // ---- Messages -----------------------------------------------------------
   const toastEl = $('toast');
   let toastTimer = 0;
@@ -385,6 +371,7 @@ button:focus-visible { outline: 2px solid var(--o2); outline-offset: 2px; }
       if (cl.item === 'o2') { p.o2 = Math.min(100, p.o2 + 45); say('Oxygen canister. +45 O₂'); }
       if (cl.item === 'warm') { p.wm = Math.min(100, p.wm + 30); say('Hand warmers. +30 warmth'); }
       cl.item = null;
+      if (cl.mesh) cl.mesh.visible = false;
     }
     if (cl.t === 'camp') {
       g.anchor = { r: p.r, c: p.c };
@@ -423,7 +410,7 @@ button:focus-visible { outline: 2px solid var(--o2); outline-offset: 2px; }
     p.hp = Math.min(100, p.hp + 40); p.st = 100; p.wm = 100;
     if (altOf(p.r) < DEATH_ZONE) p.o2 = 100;
     g.wx = { state: 'calm', t: 30, pending: false };
-    g.rocks = [];
+    clearRocks();
     say(`You sheltered through the night. Day ${dayOf()} begins.`);
   }
   function canBivouac() {
@@ -543,11 +530,10 @@ button:focus-visible { outline: 2px solid var(--o2); outline-offset: 2px; }
       const c = Math.random() < 0.55 ? p.c : Math.floor(Math.random() * COLS);
       g.rocks.push({ c, row: null, warn: 1.15, vy: 11, spin: Math.random() * 6 });
     }
-    const rowsAbove = (H * 0.68) / cell;
     for (const rk of g.rocks) {
       if (rk.warn > 0) {
         rk.warn -= dt;
-        if (rk.warn <= 0) rk.row = g.cam + rowsAbove + 1;
+        if (rk.warn <= 0) rk.row = g.p.r + 11;
         continue;
       }
       const prevRow = rk.row;
@@ -562,7 +548,6 @@ button:focus-visible { outline: 2px solid var(--o2); outline-offset: 2px; }
         }
       }
     }
-    g.rocks = g.rocks.filter(rk => rk.row === null || rk.row > g.cam - 12);
 
     // Smooth display position and camera
     const k = Math.min(1, dt * 14);
@@ -571,282 +556,408 @@ button:focus-visible { outline: 2px solid var(--o2); outline-offset: 2px; }
     g.cam = lerp(g.cam, p.dr, Math.min(1, dt * 6));
   }
 
-  // ---- Rendering ----------------------------------------------------------
-  const flakes = Array.from({ length: 220 }, () => ({ x: Math.random(), y: Math.random(), s: 0.5 + Math.random() * 1.6, v: 0.3 + Math.random() }));
+  // ---- 3D rendering -------------------------------------------------------
+  // World units: one grid cell = 1. x = column - 3, y = row, z points out of the face toward the camera.
+  let renderer = null, scene, camera, hemi, sun, headlamp, range, stars, snow, snowPos, snowVel, rope, ropePos, climber;
+  const GEO = {}, MAT = {}, rowGroups = new Map(), labelMats = new Map();
+  const SNOW_N = 1400, ROPE_N = 24;
+  let SKY_C, tmpTop, tmpBot, tmpFog, NIGHT_FOG, STORM_FOG, SUN_WARM, SUN_DAY;
+  let bgKey = '', camDist = 9;
 
-  function rowY(r) { return H * 0.68 - (r - g.cam) * cell; }
-  function colX(c) { return faceX + c * cell; }
+  function initScene() {
+    const C = hex => new THREE.Color(hex);
+    SKY_C = SKY.map(([h, a, b]) => [h, C(a), C(b)]);
+    tmpTop = C('#000000'); tmpBot = C('#000000'); tmpFog = C('#000000');
+    NIGHT_FOG = C('#0b1220'); STORM_FOG = C('#a9b8c7'); SUN_WARM = C('#ffb27a'); SUN_DAY = C('#fff6e8');
+    renderer = new THREE.WebGLRenderer({ canvas, antialias: true, alpha: true });
+    renderer.setClearColor(0x000000, 0);
+    scene = new THREE.Scene();
+    scene.fog = new THREE.Fog(0x9fb6cc, 8, 60);
+    camera = new THREE.PerspectiveCamera(55, 1, 0.1, 500);
 
-  function drawSky(h) {
-    const [top, bot] = skyColors(h);
-    const grd = ctx.createLinearGradient(0, 0, 0, H);
-    grd.addColorStop(0, top); grd.addColorStop(1, bot);
-    ctx.fillStyle = grd;
-    ctx.fillRect(0, 0, W, H);
-    const night = nightFactor(h);
-    if (night > 0) {
-      ctx.fillStyle = `rgba(255,255,255,${0.7 * night})`;
-      for (let i = 0; i < 60; i++) {
-        const x = hash(i, 1, 7) * W, y = hash(i, 2, 7) * H * 0.9;
-        ctx.fillRect(x, y, 1.2, 1.2);
-      }
+    hemi = new THREE.HemisphereLight(0xcfe3ff, 0x2a3346, 0.6);
+    sun = new THREE.DirectionalLight(0xffffff, 0.9);
+    scene.add(hemi, sun, sun.target, new THREE.AmbientLight(0x404a60, 0.3));
+
+    GEO.box = new THREE.BoxGeometry(1, 1, 1);
+    GEO.hold = new THREE.DodecahedronGeometry(0.09, 0);
+    GEO.rock = new THREE.DodecahedronGeometry(0.24, 0);
+    GEO.icicle = new THREE.ConeGeometry(0.05, 0.32, 5);
+    GEO.tent = new THREE.ConeGeometry(0.4, 0.62, 4);
+    GEO.pole = new THREE.CylinderGeometry(0.02, 0.02, 0.9, 5);
+    GEO.can = new THREE.CylinderGeometry(0.09, 0.09, 0.32, 12);
+    GEO.limb = new THREE.CylinderGeometry(0.045, 0.04, 0.32, 6); GEO.limb.translate(0, -0.16, 0);
+    GEO.head = new THREE.SphereGeometry(0.12, 14, 10);
+
+    const std = (color, o) => new THREE.MeshStandardMaterial(Object.assign({ color, roughness: 0.92, metalness: 0, flatShading: true }, o || {}));
+    MAT.rock = ['#46536a', '#4d5b73', '#55637a', '#3f4b60', '#5b677c'].map(c => std(c));
+    MAT.back = std('#1a2334');
+    MAT.side = std('#323d51');
+    MAT.hold = std('#1e2738');
+    MAT.ice = std('#bfe6f7', { roughness: 0.12, metalness: 0.15, transparent: true, opacity: 0.86 });
+    MAT.snow = std('#eef4f8', { roughness: 1 });
+    MAT.tentA = std('#ff6a3d'); MAT.tentB = std('#f2b134');
+    MAT.pole = std('#2a3346'); MAT.flagBlue = std('#6cc4ff'); MAT.flagOrange = std('#ff6a3d');
+    MAT.food = std('#f2b134', { emissive: '#6b4300', emissiveIntensity: 0.7 });
+    MAT.o2 = std('#6cc4ff', { emissive: '#0e4a73', emissiveIntensity: 0.8, flatShading: false });
+    MAT.warm = std('#ff8a4c', { emissive: '#7a2b00', emissiveIntensity: 0.8 });
+    MAT.jacket = std('#ff6a3d'); MAT.pack = std('#4a3a2e'); MAT.helmet = std('#f2b134', { flatShading: false }); MAT.pants = std('#26324a');
+    MAT.boulder = std('#707a8d');
+    MAT.dz = new THREE.MeshBasicMaterial({ color: '#ff8a4c', transparent: true, opacity: 0.75 });
+
+    // Glacier at the foot of the face
+    const ground = new THREE.Mesh(new THREE.PlaneGeometry(400, 400), MAT.snow);
+    ground.rotation.x = -Math.PI / 2; ground.position.y = -0.52;
+    scene.add(ground);
+
+    // Distant ranges (no fog, so they stay on the horizon)
+    range = new THREE.Group();
+    const mMat = std('#34425e', { fog: false }), capMat = std('#dfe9f1', { fog: false });
+    for (let i = 0; i < 16; i++) {
+      const h = 22 + hash(i, 1, 4) * 38, rad = h * (0.5 + hash(i, 5, 4) * 0.3), seg = 5 + (i % 3);
+      const x = (hash(i, 2, 4) - 0.5) * 220, z = -70 - hash(i, 3, 4) * 90, rot = hash(i, 6, 4) * 3;
+      const m = new THREE.Mesh(new THREE.ConeGeometry(rad, h, seg), mMat);
+      m.position.set(x, h / 2 - 14, z); m.rotation.y = rot;
+      const capH = h * 0.32;
+      const cap = new THREE.Mesh(new THREE.ConeGeometry(rad * 0.33, capH, seg), capMat);
+      cap.position.set(x, h - 14 - capH / 2 + 0.05, z); cap.rotation.y = rot;
+      range.add(m, cap);
     }
-    // Distant ranges with parallax
-    const ranges = [[0.18, '#2a3a5c', 0.55], [0.35, '#1e2b45', 0.75]];
-    for (const [par, col, base] of ranges) {
-      ctx.fillStyle = col;
-      ctx.globalAlpha = 0.85;
-      ctx.beginPath();
-      ctx.moveTo(0, H);
-      const off = g.cam * cell * par;
-      for (let x = 0; x <= W + 20; x += 20) {
-        const i = Math.floor(x / 20);
-        const y = H * base + off - hash(i, Math.round(par * 100), 3) * 60 - Math.sin(i * 0.7 + par * 10) * 30;
-        ctx.lineTo(x, y);
-      }
-      ctx.lineTo(W, H);
-      ctx.closePath();
-      ctx.fill();
-      ctx.globalAlpha = 1;
+    scene.add(range);
+
+    // Stars
+    const sp = new Float32Array(400 * 3);
+    for (let i = 0; i < 400; i++) {
+      const th = Math.random() * Math.PI * 2, ph = Math.random() * Math.PI * 0.45;
+      sp[i * 3] = Math.cos(th) * Math.sin(ph) * 200;
+      sp[i * 3 + 1] = Math.cos(ph) * 200;
+      sp[i * 3 + 2] = -Math.abs(Math.sin(th) * Math.sin(ph) * 200) - 20;
     }
+    const sg = new THREE.BufferGeometry(); sg.setAttribute('position', new THREE.BufferAttribute(sp, 3));
+    stars = new THREE.Points(sg, new THREE.PointsMaterial({ color: 0xffffff, size: 0.9, transparent: true, opacity: 0, fog: false, depthWrite: false }));
+    scene.add(stars);
+
+    // Snowfall
+    snowPos = new Float32Array(SNOW_N * 3); snowVel = new Float32Array(SNOW_N);
+    for (let i = 0; i < SNOW_N; i++) {
+      snowPos[i * 3] = (Math.random() - 0.5) * 18;
+      snowPos[i * 3 + 1] = Math.random() * 20 - 7;
+      snowPos[i * 3 + 2] = Math.random() * 10 - 0.5;
+      snowVel[i] = 0.6 + Math.random();
+    }
+    const ng = new THREE.BufferGeometry(); ng.setAttribute('position', new THREE.BufferAttribute(snowPos, 3));
+    snow = new THREE.Points(ng, new THREE.PointsMaterial({ color: 0xffffff, size: 0.06, transparent: true, opacity: 0.9, depthWrite: false }));
+    snow.frustumCulled = false;
+    scene.add(snow);
+
+    // Rope back to the last camp
+    ropePos = new Float32Array(ROPE_N * 3);
+    const rg = new THREE.BufferGeometry(); rg.setAttribute('position', new THREE.BufferAttribute(ropePos, 3));
+    rope = new THREE.Line(rg, new THREE.LineBasicMaterial({ color: '#f2b134' }));
+    rope.frustumCulled = false;
+    scene.add(rope);
+
+    // Climber, seen from behind, facing the wall
+    climber = new THREE.Group();
+    const part = (geo, mat, sx, sy, sz, x, y, z) => { const m = new THREE.Mesh(geo, mat); m.scale.set(sx, sy, sz); m.position.set(x, y, z); climber.add(m); return m; };
+    part(GEO.box, MAT.jacket, 0.3, 0.36, 0.2, 0, 0.02, 0);
+    part(GEO.box, MAT.pack, 0.25, 0.3, 0.15, 0, 0.05, 0.16);
+    part(GEO.box, MAT.tentB, 0.26, 0.05, 0.16, 0, 0.21, 0.17);
+    part(GEO.head, MAT.helmet, 1, 1, 1, 0, 0.32, -0.01);
+    const limb = (mat, x, y) => { const pv = new THREE.Group(); pv.position.set(x, y, 0); pv.add(new THREE.Mesh(GEO.limb, mat)); climber.add(pv); return pv; };
+    climber.userData = {
+      armL: limb(MAT.jacket, -0.17, 0.16), armR: limb(MAT.jacket, 0.17, 0.16),
+      legL: limb(MAT.pants, -0.08, -0.15), legR: limb(MAT.pants, 0.08, -0.15),
+    };
+    headlamp = new THREE.PointLight(0xfff1c8, 0, 7, 1.6);
+    headlamp.position.set(0, 0.34, -0.3);
+    climber.add(headlamp);
+    scene.add(climber);
   }
 
-  function drawCell(r, c, x, y, s) {
-    const cl = cellAt(r, c);
-    const t = cl.t;
-    const n = hash(r, c);
-    if (t === 'sky') return;
-    if (t === 'snow' || t === 'camp' || t === 'summit') {
-      ctx.fillStyle = mix('#dfe9f1', '#c4d4e2', n);
-      ctx.fillRect(x, y, s + 0.5, s + 0.5);
-      ctx.fillStyle = 'rgba(120,150,180,.25)';
-      ctx.fillRect(x, y + s * 0.82, s + 0.5, s * 0.18);
-      if (t === 'camp' && n < 0.45) drawTent(x + s * 0.5, y + s * 0.8, s, n);
-      if (t === 'camp' && n > 0.85) drawFlag(x + s * 0.5, y + s * 0.82, s, '#6cc4ff');
-      if (t === 'summit' && c === 3) drawFlag(x + s * 0.5, y + s * 0.85, s * 1.3, '#ff6a3d');
-      return;
-    }
-    if (t === 'blank') {
-      ctx.fillStyle = mix('#0f1828', '#18233a', n);
-      ctx.fillRect(x, y, s + 0.5, s + 0.5);
-      ctx.strokeStyle = 'rgba(0,0,0,.35)';
-      ctx.lineWidth = 1;
-      ctx.beginPath();
-      for (let i = 0; i < 3; i++) { const lx = x + s * (0.2 + 0.3 * i + 0.1 * hash(r, c, i)); ctx.moveTo(lx, y); ctx.lineTo(lx - 2, y + s); }
-      ctx.stroke();
-      return;
-    }
-    // rock base (also under ice / ledge)
-    ctx.fillStyle = mix('#3c4a60', '#55637a', n);
-    ctx.fillRect(x, y, s + 0.5, s + 0.5);
-    ctx.fillStyle = 'rgba(255,255,255,.06)';
-    ctx.beginPath();
-    ctx.moveTo(x, y); ctx.lineTo(x + s * (0.4 + 0.4 * hash(r, c, 2)), y); ctx.lineTo(x, y + s * 0.6); ctx.fill();
-    // holds
-    ctx.fillStyle = 'rgba(15,22,35,.55)';
-    for (let i = 0; i < 3; i++) {
-      const hx = x + s * (0.15 + 0.7 * hash(r, c, 10 + i)), hy = y + s * (0.15 + 0.7 * hash(r, c, 20 + i));
-      ctx.beginPath(); ctx.ellipse(hx, hy, s * 0.07, s * 0.04, 0, 0, Math.PI * 2); ctx.fill();
-    }
-    if (t === 'ice') {
-      ctx.fillStyle = 'rgba(190,232,250,.72)';
-      ctx.fillRect(x, y, s + 0.5, s + 0.5);
-      ctx.strokeStyle = 'rgba(255,255,255,.75)';
-      ctx.lineWidth = 2;
-      ctx.beginPath();
-      ctx.moveTo(x + s * 0.2, y + s * 0.85); ctx.lineTo(x + s * 0.55, y + s * 0.15);
-      ctx.moveTo(x + s * 0.5, y + s * 0.9); ctx.lineTo(x + s * 0.75, y + s * 0.4);
-      ctx.stroke();
-    }
-    if (t === 'ledge') {
-      ctx.fillStyle = '#e6eef5';
-      ctx.beginPath();
-      ctx.moveTo(x - 1, y + s * 0.62);
-      ctx.quadraticCurveTo(x + s * 0.5, y + s * (0.48 + 0.08 * n), x + s + 1, y + s * 0.62);
-      ctx.lineTo(x + s + 1, y + s * 0.78); ctx.lineTo(x - 1, y + s * 0.78); ctx.closePath(); ctx.fill();
-      ctx.fillStyle = 'rgba(20,30,48,.45)';
-      ctx.fillRect(x, y + s * 0.78, s + 0.5, s * 0.08);
-    }
-    if (cl.item) drawItem(cl.item, x + s / 2, y + s / 2, s);
+  const mesh = (geo, mat) => new THREE.Mesh(geo, mat);
+
+  function labelMat(r) {
+    if (labelMats.has(r)) return labelMats.get(r);
+    const cv = document.createElement('canvas'); cv.width = 256; cv.height = 64;
+    const x = cv.getContext('2d');
+    x.font = '600 40px "IBM Plex Mono", ui-monospace, monospace';
+    x.fillStyle = altOf(r) >= DEATH_ZONE ? '#ff8a4c' : '#eaf1f6';
+    x.textAlign = 'right'; x.textBaseline = 'middle';
+    x.fillText(fmt(altOf(r)), 250, 34);
+    const m = new THREE.SpriteMaterial({ map: new THREE.CanvasTexture(cv), transparent: true, depthWrite: false });
+    labelMats.set(r, m);
+    return m;
   }
 
-  function drawTent(cx, by, s, n) {
-    ctx.fillStyle = n < 0.22 ? '#ff6a3d' : '#f2b134';
-    ctx.beginPath();
-    ctx.moveTo(cx - s * 0.32, by); ctx.lineTo(cx, by - s * 0.42); ctx.lineTo(cx + s * 0.32, by); ctx.closePath(); ctx.fill();
-    ctx.fillStyle = 'rgba(0,0,0,.35)';
-    ctx.beginPath(); ctx.moveTo(cx - s * 0.06, by); ctx.lineTo(cx, by - s * 0.2); ctx.lineTo(cx + s * 0.06, by); ctx.fill();
-  }
-  function drawFlag(cx, by, s, col) {
-    ctx.strokeStyle = '#2a3346'; ctx.lineWidth = 2;
-    ctx.beginPath(); ctx.moveTo(cx, by); ctx.lineTo(cx, by - s * 0.7); ctx.stroke();
-    const wave = Math.sin(g.time * 6) * s * 0.04;
-    ctx.fillStyle = col;
-    ctx.beginPath(); ctx.moveTo(cx, by - s * 0.7); ctx.lineTo(cx + s * 0.32, by - s * 0.6 + wave); ctx.lineTo(cx, by - s * 0.5); ctx.fill();
-  }
-  function drawItem(kind, cx, cy, s) {
-    const bob = reduceMotion ? 0 : Math.sin(g.time * 3 + cx) * s * 0.03;
-    cy += bob;
-    ctx.save();
-    ctx.shadowColor = 'rgba(255,255,255,.6)'; ctx.shadowBlur = 8;
+  function itemMesh(kind) {
+    const grp = new THREE.Group();
     if (kind === 'food') {
-      ctx.fillStyle = '#8a5a34'; ctx.fillRect(cx - s * 0.2, cy - s * 0.1, s * 0.4, s * 0.2);
-      ctx.fillStyle = '#f2b134'; ctx.fillRect(cx - s * 0.08, cy - s * 0.1, s * 0.16, s * 0.2);
+      const m = mesh(GEO.box, MAT.food); m.scale.set(0.34, 0.14, 0.1); grp.add(m);
+      const w = mesh(GEO.box, MAT.pack); w.scale.set(0.12, 0.15, 0.11); grp.add(w);
     } else if (kind === 'o2') {
-      ctx.fillStyle = '#6cc4ff'; ctx.fillRect(cx - s * 0.1, cy - s * 0.2, s * 0.2, s * 0.38);
-      ctx.fillStyle = '#e8f4fb'; ctx.fillRect(cx - s * 0.05, cy - s * 0.27, s * 0.1, s * 0.08);
+      grp.add(mesh(GEO.can, MAT.o2));
+      const v = mesh(GEO.box, MAT.snow); v.scale.set(0.06, 0.07, 0.06); v.position.y = 0.19; grp.add(v);
     } else {
-      ctx.fillStyle = '#ff8a4c'; ctx.fillRect(cx - s * 0.14, cy - s * 0.14, s * 0.28, s * 0.28);
-      ctx.strokeStyle = '#ffd2b8'; ctx.lineWidth = 1.5;
-      ctx.beginPath();
-      for (let i = -1; i <= 1; i++) { ctx.moveTo(cx + i * s * 0.07, cy + s * 0.06); ctx.lineTo(cx + i * s * 0.07, cy - s * 0.06); }
-      ctx.stroke();
+      const m = mesh(GEO.box, MAT.warm); m.scale.set(0.26, 0.26, 0.08); grp.add(m);
     }
-    ctx.restore();
+    return grp;
   }
 
-  function drawClimber(x, y, s) {
-    const p = g.p;
-    if (p.invuln > 0 && Math.floor(g.time * 12) % 2 === 0) return;
-    const reach = p.step % 2 === 0 ? 1 : -1;
-    ctx.lineCap = 'round';
-    // legs
-    ctx.strokeStyle = '#26324a'; ctx.lineWidth = s * 0.09;
-    ctx.beginPath();
-    ctx.moveTo(x - s * 0.06, y + s * 0.08); ctx.lineTo(x - s * 0.16, y + s * 0.3 - reach * s * 0.05);
-    ctx.moveTo(x + s * 0.06, y + s * 0.08); ctx.lineTo(x + s * 0.16, y + s * 0.3 + reach * s * 0.05);
-    ctx.stroke();
-    // arms
-    ctx.strokeStyle = '#d9502b'; ctx.lineWidth = s * 0.08;
-    ctx.beginPath();
-    ctx.moveTo(x - s * 0.08, y - s * 0.12); ctx.lineTo(x - s * 0.2, y - s * 0.3 - reach * s * 0.06);
-    ctx.moveTo(x + s * 0.08, y - s * 0.12); ctx.lineTo(x + s * 0.2, y - s * 0.3 + reach * s * 0.06);
-    ctx.stroke();
-    // body + pack
-    ctx.fillStyle = '#4a3a2e'; ctx.fillRect(x - s * 0.1, y - s * 0.12, s * 0.2, s * 0.18);
-    ctx.fillStyle = '#ff6a3d';
-    ctx.beginPath(); ctx.roundRect ? ctx.roundRect(x - s * 0.11, y - s * 0.16, s * 0.22, s * 0.26, s * 0.05) : ctx.rect(x - s * 0.11, y - s * 0.16, s * 0.22, s * 0.26); ctx.fill();
-    // helmet
-    ctx.fillStyle = '#f2b134';
-    ctx.beginPath(); ctx.arc(x, y - s * 0.24, s * 0.085, 0, Math.PI * 2); ctx.fill();
-    // headlamp at night
-    const night = nightFactor(hourOf());
-    if (night > 0.2) {
-      ctx.fillStyle = `rgba(255,244,200,${night})`;
-      ctx.beginPath(); ctx.arc(x, y - s * 0.27, s * 0.03, 0, Math.PI * 2); ctx.fill();
+  function addFlag(grp, x, y, z, mat, size) {
+    const pole = mesh(GEO.pole, MAT.pole); pole.scale.y = size; pole.position.set(x, y + 0.45 * size, z); grp.add(pole);
+    const flag = mesh(GEO.box, mat); flag.scale.set(0.36 * size, 0.22 * size, 0.02); flag.position.set(x + 0.18 * size, y + 0.78 * size, z);
+    flag.userData.flag = true;
+    grp.add(flag);
+  }
+
+  function buildRow(r) {
+    const grp = new THREE.Group();
+    grp.position.y = r;
+    grp.userData.items = [];
+    grp.userData.flags = [];
+    const back = mesh(GEO.box, MAT.back); back.scale.set(COLS + 3, 1.02, 1); back.position.z = -0.95; grp.add(back);
+    for (const side of [-1, 1]) {
+      const h = hash(r, side, 9);
+      const b = mesh(GEO.box, MAT.side);
+      b.scale.set(1.7, 1.08, 1.3 + h * 1.4);
+      b.position.set(side * (COLS / 2 + 0.75 + h * 0.35), 0, -0.45 + b.scale.z / 2 - 0.3);
+      b.rotation.set((hash(r, side, 8) - 0.5) * 0.35, (h - 0.5) * 0.4, (hash(r, side, 7) - 0.5) * 0.3);
+      grp.add(b);
     }
+    const t0 = cellAt(r, 0).t;
+    if (t0 === 'camp' || t0 === 'summit') {
+      const wall = mesh(GEO.box, MAT.snow); wall.scale.set(COLS, 1, 0.6); wall.position.z = -0.35; grp.add(wall);
+      const plat = mesh(GEO.box, MAT.snow); plat.scale.set(COLS + 1.4, 0.36, 2.0); plat.position.set(0, -0.33, 0.5); grp.add(plat);
+      for (let c = 0; c < COLS; c++) {
+        const n = hash(r, c);
+        const x = c - 3;
+        if (t0 === 'camp' && n < 0.45) {
+          const tent = mesh(GEO.tent, n < 0.22 ? MAT.tentA : MAT.tentB);
+          tent.position.set(x, 0.16, 0.85); tent.rotation.y = Math.PI / 4 + (n - 0.2);
+          grp.add(tent);
+        }
+        if (t0 === 'camp' && n > 0.85) addFlag(grp, x, -0.15, 0.3, MAT.flagBlue, 1);
+      }
+      if (t0 === 'summit') {
+        const peak = mesh(new THREE.ConeGeometry(3.2, 3.6, 6), MAT.snow);
+        peak.position.set(0, 1.9, -1.2); grp.add(peak);
+        addFlag(grp, 0, -0.15, 0.6, MAT.flagOrange, 1.4);
+      }
+    } else {
+      for (let c = 0; c < COLS; c++) {
+        const cl = cellAt(r, c);
+        if (cl.t === 'blank') continue;
+        const x = c - 3;
+        const h = hash(r, c);
+        const depth = 0.55 + 0.45 * h;
+        const front = 0.04 + 0.22 * hash(r, c, 3);
+        const block = mesh(GEO.box, cl.t === 'ice' ? MAT.ice : MAT.rock[Math.floor(h * 5)]);
+        block.scale.set(0.98, 0.98, depth);
+        block.position.set(x, 0, front - depth / 2);
+        block.rotation.set((hash(r, c, 4) - 0.5) * 0.22, (hash(r, c, 5) - 0.5) * 0.22, (hash(r, c, 6) - 0.5) * 0.12);
+        grp.add(block);
+        if (cl.t === 'ice') {
+          for (let i = 0; i < 2; i++) {
+            const ic = mesh(GEO.icicle, MAT.ice);
+            ic.rotation.x = Math.PI;
+            ic.position.set(x + (hash(r, c, 30 + i) - 0.5) * 0.7, -0.6, front - 0.06);
+            ic.scale.y = 0.7 + hash(r, c, 40 + i) * 0.8;
+            grp.add(ic);
+          }
+        } else {
+          for (let i = 0; i < 2; i++) {
+            const hd = mesh(GEO.hold, MAT.hold);
+            hd.position.set(x + (hash(r, c, 10 + i) - 0.5) * 0.7, (hash(r, c, 20 + i) - 0.5) * 0.7, front + 0.02);
+            grp.add(hd);
+          }
+        }
+        if (cl.t === 'ledge') {
+          const slab = mesh(GEO.box, MAT.snow);
+          slab.scale.set(1.04, 0.16, 0.8); slab.position.set(x, -0.32, front + 0.26);
+          grp.add(slab);
+        }
+        if (cl.item) {
+          const it = itemMesh(cl.item);
+          it.position.set(x, 0.05, front + 0.3);
+          it.userData.phase = h * 6;
+          cl.mesh = it;
+          grp.add(it);
+          grp.userData.items.push(it);
+        }
+      }
+    }
+    if (r % 5 === 0) {
+      const s = new THREE.Sprite(labelMat(r));
+      s.scale.set(1.6, 0.4, 1);
+      s.position.set(-(COLS / 2 + 2.3), 0, 0.8);
+      grp.add(s);
+    }
+    if (r === (DEATH_ZONE - BASE_ALT) / M_PER_ROW) {
+      const line = mesh(GEO.box, MAT.dz); line.scale.set(COLS + 2.5, 0.04, 0.04); line.position.set(0, -0.52, 1.5); grp.add(line);
+    }
+    grp.traverse(o => { if (o.userData.flag) grp.userData.flags.push(o); });
+    return grp;
   }
 
-  function drawRope(px, py) {
-    const ax = colX(g.anchor.c) + cell / 2, ay = rowY(g.anchor.r) + cell * 0.75;
-    ctx.strokeStyle = 'rgba(242,177,52,.8)'; ctx.lineWidth = 1.5;
-    ctx.beginPath();
-    ctx.moveTo(ax, ay);
-    ctx.quadraticCurveTo((ax + px) / 2 + cell * 0.4, (ay + py) / 2 + cell * 0.3, px, py + cell * 0.08);
-    ctx.stroke();
+  function clearWorldMeshes() {
+    for (const grp of rowGroups.values()) scene.remove(grp);
+    rowGroups.clear();
+    if (g) clearRocks();
+  }
+  function clearRocks() {
+    for (const rk of g.rocks) removeRockMeshes(rk);
+    g.rocks = [];
+  }
+  function removeRockMeshes(rk) {
+    if (rk.warnMesh) { scene.remove(rk.warnMesh); rk.warnMesh.material.dispose(); rk.warnMesh = null; }
+    if (rk.mesh) { scene.remove(rk.mesh); rk.mesh = null; }
   }
 
-  function drawRocks() {
+  function syncRows() {
+    const lo = Math.max(0, Math.floor(g.cam) - 9), hi = Math.min(SUMMIT_ROW, Math.ceil(g.cam) + 32);
+    for (const [r, grp] of rowGroups) if (r < lo - 2 || r > hi + 2) { scene.remove(grp); rowGroups.delete(r); }
+    for (let r = lo; r <= hi; r++) if (!rowGroups.has(r)) { const grp = buildRow(r); scene.add(grp); rowGroups.set(r, grp); }
+  }
+
+  function syncRocks() {
     for (const rk of g.rocks) {
-      const x = colX(rk.c) + cell / 2;
+      const x = rk.c - 3;
       if (rk.warn > 0) {
-        const a = 0.5 + 0.5 * Math.sin(g.time * 18);
-        ctx.fillStyle = `rgba(255,106,61,${0.15 + 0.15 * a})`;
-        ctx.fillRect(colX(rk.c), 0, cell, H);
-        ctx.fillStyle = `rgba(255,106,61,${0.6 + 0.4 * a})`;
-        ctx.beginPath(); ctx.moveTo(x - cell * 0.22, 8); ctx.lineTo(x + cell * 0.22, 8); ctx.lineTo(x, 8 + cell * 0.35); ctx.closePath(); ctx.fill();
+        if (!rk.warnMesh) {
+          rk.warnMesh = mesh(GEO.box, new THREE.MeshBasicMaterial({ color: '#ff6a3d', transparent: true, opacity: 0.25, depthWrite: false }));
+          rk.warnMesh.scale.set(0.95, 18, 0.04);
+          scene.add(rk.warnMesh);
+        }
+        rk.warnMesh.position.set(x, g.p.r + 7, 0.8);
+        rk.warnMesh.material.opacity = 0.12 + 0.22 * Math.abs(Math.sin(g.time * 9));
         continue;
       }
-      const y = rowY(rk.row) + cell / 2;
-      ctx.fillStyle = 'rgba(200,210,225,.25)';
-      ctx.fillRect(x - cell * 0.06, y - cell * 1.2, cell * 0.12, cell);
-      ctx.save(); ctx.translate(x, y); ctx.rotate(rk.spin);
-      ctx.fillStyle = '#6b7487';
-      ctx.beginPath();
-      for (let i = 0; i < 7; i++) {
-        const a = (i / 7) * Math.PI * 2, rr = cell * (0.17 + 0.07 * hash(i, rk.c, 5));
-        i ? ctx.lineTo(Math.cos(a) * rr, Math.sin(a) * rr) : ctx.moveTo(Math.cos(a) * rr, Math.sin(a) * rr);
+      if (rk.warnMesh) { scene.remove(rk.warnMesh); rk.warnMesh.material.dispose(); rk.warnMesh = null; }
+      if (!rk.mesh) {
+        rk.mesh = mesh(GEO.rock, MAT.boulder);
+        const s = 1 + Math.random() * 0.5;
+        rk.mesh.scale.set(s, s * 0.85, s);
+        scene.add(rk.mesh);
       }
-      ctx.closePath(); ctx.fill();
-      ctx.restore();
+      rk.mesh.position.set(x, rk.row, 0.7);
+      rk.mesh.rotation.set(rk.spin, rk.spin * 0.7, 0);
     }
+    const keep = [];
+    for (const rk of g.rocks) {
+      if (rk.row !== null && rk.row < g.cam - 12) removeRockMeshes(rk); else keep.push(rk);
+    }
+    g.rocks = keep;
   }
 
-  function draw() {
-    const h = hourOf();
-    const night = nightFactor(h);
-    const storm = g.wx.state === 'storm';
-    ctx.save();
-    if (g.shake > 0) ctx.translate((Math.random() - 0.5) * 8 * g.shake, (Math.random() - 0.5) * 8 * g.shake);
-
-    drawSky(h);
-
-    // Face
-    const rTop = Math.ceil(g.cam + (H * 0.68) / cell) + 1;
-    const rBot = Math.floor(g.cam - (H * 0.32) / cell) - 1;
-    for (let r = rBot; r <= rTop; r++) {
-      if (r > SUMMIT_ROW) continue;
-      const y = rowY(r) - cell / 2;
-      for (let c = 0; c < COLS; c++) drawCell(r, c, colX(c), y, cell);
-      // jagged side edges
-      if (r >= 0) {
-        ctx.fillStyle = '#3c4a60';
-        const jl = cell * 0.3 * hash(r, -1, 9), jr = cell * 0.3 * hash(r, COLS, 9);
-        ctx.beginPath(); ctx.moveTo(faceX, y); ctx.lineTo(faceX - jl, y + cell / 2); ctx.lineTo(faceX, y + cell); ctx.fill();
-        ctx.beginPath(); ctx.moveTo(faceX + COLS * cell, y); ctx.lineTo(faceX + COLS * cell + jr, y + cell / 2); ctx.lineTo(faceX + COLS * cell, y + cell); ctx.fill();
-      }
-      // altitude ticks every 100 m
-      if (r >= 0 && r % 5 === 0) {
-        ctx.fillStyle = altOf(r) >= DEATH_ZONE ? 'rgba(255,138,76,.95)' : 'rgba(234,241,246,.75)';
-        ctx.font = `600 ${Math.max(9, cell * 0.2)}px "IBM Plex Mono", monospace`;
-        ctx.textAlign = 'right'; ctx.textBaseline = 'middle';
-        ctx.fillText(fmt(altOf(r)), faceX - 6, rowY(r));
-      }
-      if (r === DEATH_ZONE / M_PER_ROW - BASE_ALT / M_PER_ROW) {
-        ctx.strokeStyle = 'rgba(255,138,76,.6)'; ctx.setLineDash([6, 6]); ctx.lineWidth = 1.5;
-        ctx.beginPath(); ctx.moveTo(faceX, y + cell); ctx.lineTo(faceX + COLS * cell, y + cell); ctx.stroke();
-        ctx.setLineDash([]);
-      }
-    }
-
-    const px = colX(g.p.dc) + cell / 2;
-    const py = rowY(g.p.dr) + cell * 0.08;
-    drawRope(px, py);
-    drawClimber(px, py, cell);
-    drawRocks();
-
-    // Darkness and visibility
-    const dark = 0.78 * night + (storm ? 0.3 : 0);
-    if (dark > 0.02) {
-      const inner = cell * 1.1, outer = cell * (storm ? 3.2 : 4.6);
-      const grd = ctx.createRadialGradient(px, py, inner, px, py, outer);
-      grd.addColorStop(0, 'rgba(6,10,22,0)');
-      grd.addColorStop(1, `rgba(6,10,22,${clamp(dark, 0, 0.92)})`);
-      ctx.fillStyle = grd;
-      ctx.fillRect(-10, -10, W + 20, H + 20);
-    }
-    if (storm) { ctx.fillStyle = 'rgba(200,215,230,.12)'; ctx.fillRect(0, 0, W, H); }
-
-    // Snow
-    const count = storm ? flakes.length : 70;
-    const wind = storm ? 0.9 : 0.12;
-    ctx.fillStyle = 'rgba(255,255,255,.85)';
-    for (let i = 0; i < count; i++) {
-      const f = flakes[i];
-      ctx.fillRect(f.x * W, f.y * H, f.s * (storm ? 1.4 : 1), f.s * (storm ? 1.4 : 1));
-    }
-    ctx.restore();
-    return wind;
+  function syncClimber() {
+    const p = g.p;
+    climber.position.set(p.dc - 3, p.dr - 0.02, 0.45);
+    climber.visible = !(p.invuln > 0 && Math.floor(g.time * 12) % 2 === 0);
+    const u = climber.userData;
+    const reach = p.step % 2 === 0 ? 1 : -1;
+    const sway = reduceMotion ? 0 : Math.sin(g.time * 1.6) * 0.04;
+    u.armL.rotation.z = -(Math.PI - 0.45) + reach * 0.22 + sway;
+    u.armR.rotation.z = (Math.PI - 0.45) + reach * 0.22 + sway;
+    u.legL.rotation.z = -0.32 - reach * 0.12;
+    u.legR.rotation.z = 0.32 - reach * 0.12;
+    climber.rotation.z = sway * 0.5;
   }
 
-  function stepFlakes(dt, wind) {
-    if (reduceMotion) return;
-    for (const f of flakes) {
-      f.y += dt * f.v * 0.12 * (1 + wind);
-      f.x += dt * wind * f.v * 0.35;
-      if (f.y > 1) { f.y = 0; f.x = Math.random(); }
-      if (f.x > 1) f.x = 0;
+  function syncRope() {
+    const ax = g.anchor.c - 3, ay = g.anchor.r - 0.15, az = 0.6;
+    const px = climber.position.x, py = climber.position.y - 0.1, pz = 0.5;
+    const mx = (ax + px) / 2 + 0.5, my = (ay + py) / 2 - 0.4, mz = 1.0;
+    for (let i = 0; i < ROPE_N; i++) {
+      const t = i / (ROPE_N - 1), a = (1 - t) * (1 - t), b = 2 * (1 - t) * t, c = t * t;
+      ropePos[i * 3] = a * ax + b * mx + c * px;
+      ropePos[i * 3 + 1] = a * ay + b * my + c * py;
+      ropePos[i * 3 + 2] = a * az + b * mz + c * pz;
     }
+    rope.geometry.attributes.position.needsUpdate = true;
+  }
+
+  function syncSnow(dt, storm) {
+    const fall = storm ? 2.4 : 0.8, wind = storm ? 3.2 : 0.35;
+    const live = storm ? SNOW_N : 420;
+    snow.geometry.setDrawRange(0, live);
+    if (!reduceMotion) {
+      for (let i = 0; i < live; i++) {
+        const k = i * 3;
+        snowPos[k + 1] -= snowVel[i] * fall * dt;
+        snowPos[k] += wind * snowVel[i] * dt;
+        if (snowPos[k + 1] < g.cam - 7) snowPos[k + 1] += 20;
+        if (snowPos[k + 1] > g.cam + 13) snowPos[k + 1] -= 20;
+        if (snowPos[k] > 9) snowPos[k] -= 18;
+      }
+      snow.geometry.attributes.position.needsUpdate = true;
+    }
+    snow.material.size = storm ? 0.08 : 0.06;
+  }
+
+  function syncLighting(h, night, storm) {
+    for (let i = 0; i < SKY_C.length - 1; i++) {
+      const a = SKY_C[i], b = SKY_C[i + 1];
+      if (h >= a[0] && h <= b[0]) {
+        const t = (h - a[0]) / (b[0] - a[0]);
+        tmpTop.copy(a[1]).lerp(b[1], t); tmpBot.copy(a[2]).lerp(b[2], t);
+        break;
+      }
+    }
+    tmpFog.copy(tmpBot).lerp(NIGHT_FOG, night * 0.5);
+    if (storm) tmpFog.lerp(STORM_FOG, 0.75 * (1 - night * 0.7));
+    scene.fog.color.copy(tmpFog);
+    // Fog is measured from the camera, so it is offset by how far back the camera sits.
+    scene.fog.near = camDist + (storm ? -3 : 2 - 4 * night);
+    scene.fog.far = camDist + (storm ? 6 : lerp(70, 12, night));
+    const key = tmpTop.getHexString() + tmpFog.getHexString();
+    if (key !== bgKey) {
+      bgKey = key;
+      stage.style.background = `linear-gradient(to bottom, #${tmpTop.getHexString()} 0%, #${tmpFog.getHexString()} 75%)`;
+    }
+    const golden = (h > 5 && h < 8) || (h > 16.5 && h < 19.5);
+    sun.color.copy(golden ? SUN_WARM : SUN_DAY);
+    sun.intensity = 0.12 + 0.95 * (1 - night) * (storm ? 0.5 : 1);
+    const ang = ((h - 6) / 12) * Math.PI;
+    sun.position.set(Math.cos(ang) * -10, g.cam + 6 + Math.sin(ang) * 8, 9);
+    sun.target.position.set(0, g.cam, 0);
+    hemi.intensity = 0.22 + 0.5 * (1 - night);
+    headlamp.intensity = night * 3.4;
+    stars.material.opacity = storm ? 0 : night;
+  }
+
+  function syncCamera() {
+    const tanV = Math.tan(THREE.MathUtils.degToRad(camera.fov / 2));
+    const dist = camDist = Math.max(7.5, 4.4 / (tanV * camera.aspect));
+    const camX = (g.p.dc - 3) * 0.35;
+    const sx = g.shake > 0 ? (Math.random() - 0.5) * g.shake * 0.6 : 0;
+    const sy = g.shake > 0 ? (Math.random() - 0.5) * g.shake * 0.6 : 0;
+    camera.position.set(camX + sx, Math.max(0.6, g.cam - dist * 0.24) + sy, dist);
+    camera.lookAt(camX * 0.5, g.cam + dist * 0.13, 0);
+    range.position.y = g.cam * 0.9;
+    stars.position.set(camera.position.x, camera.position.y, 0);
+  }
+
+  function render(dt) {
+    if (!renderer) return;
+    const h = hourOf(), night = nightFactor(h), storm = g.wx.state === 'storm';
+    if (!g.running && !g.over) g.cam = 2.5 + Math.sin(g.time * 0.15) * 2;
+    syncRows();
+    syncRocks();
+    syncClimber();
+    syncRope();
+    syncSnow(g.paused ? 0 : dt, storm);
+    syncLighting(h, night, storm);
+    syncCamera();
+    for (const grp of rowGroups.values()) {
+      for (const it of grp.userData.items) {
+        if (!it.visible) continue;
+        it.rotation.y = g.time * 1.6 + it.userData.phase;
+        if (!reduceMotion) it.position.y = 0.05 + Math.sin(g.time * 3 + it.userData.phase) * 0.05;
+      }
+      for (const f of grp.userData.flags) f.rotation.y = Math.sin(g.time * (storm ? 9 : 4) + grp.position.y) * (storm ? 0.6 : 0.3);
+    }
+    renderer.render(scene, camera);
   }
 
   // ---- HUD ----------------------------------------------------------------
@@ -920,8 +1031,7 @@ button:focus-visible { outline: 2px solid var(--o2); outline-offset: 2px; }
     last = now;
     if (g) {
       update(dt);
-      const wind = draw();
-      stepFlakes(g.paused ? 0 : dt, wind);
+      render(dt);
       hud();
       if ((audioTick -= dt) <= 0) { audioTick = 0.5; updateAudio(); }
     }
@@ -929,14 +1039,14 @@ button:focus-visible { outline: 2px solid var(--o2); outline-offset: 2px; }
   }
 
   function resize() {
-    const box = canvas.parentElement.getBoundingClientRect();
-    const dpr = Math.min(window.devicePixelRatio || 1, 2);
-    W = box.width; H = box.height;
-    canvas.width = Math.round(W * dpr); canvas.height = Math.round(H * dpr);
+    const box = stage.getBoundingClientRect();
+    W = Math.max(1, box.width); H = Math.max(1, box.height);
+    if (!renderer) return;
+    renderer.setPixelRatio(Math.min(window.devicePixelRatio || 1, 2));
+    renderer.setSize(W, H, false);
     canvas.style.width = W + 'px'; canvas.style.height = H + 'px';
-    ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
-    cell = Math.max(20, Math.floor(Math.min((W - 56) / COLS, H / 6.5)));
-    faceX = Math.max(46, (W - cell * COLS) / 2);
+    camera.aspect = W / H;
+    camera.updateProjectionMatrix();
   }
 
   // ---- Input --------------------------------------------------------------
@@ -1017,8 +1127,16 @@ button:focus-visible { outline: 2px solid var(--o2); outline-offset: 2px; }
     for (let i = 0; i < 40; i++) genNext();
   }
 
+  try {
+    if (!window.THREE) throw new Error('three.js did not load');
+    initScene();
+  } catch (e) {
+    renderer = null;
+    $('btn-start').disabled = true;
+    $('best').textContent = 'This game needs WebGL and could not start 3D graphics in this browser.';
+  }
   window.addEventListener('resize', resize);
-  if (window.ResizeObserver) new ResizeObserver(resize).observe(canvas.parentElement);
+  if (window.ResizeObserver) new ResizeObserver(resize).observe(stage);
   resize();
   attract();
   showBest();
