@@ -4,7 +4,7 @@ import { NODES } from '../game/route';
 
 export const MOUNTAIN_H = 60;
 export const TERRAIN_SIZE = 280;
-export const TERRAIN_SEGMENTS = 180;
+export const TERRAIN_SEGMENTS = 300;
 const FT_BASE = 4000;
 const FT_TOP = 14411;
 
@@ -27,11 +27,11 @@ function vnoise(x: number, y: number) {
   return a + (b - a) * u + (c - a) * v + (a - b - c + d) * u * v;
 }
 
-export function fbm(x: number, y: number) {
+export function fbm(x: number, y: number, octaves = 4) {
   let f = 0;
   let amp = 0.5;
   let fr = 1;
-  for (let i = 0; i < 4; i++) {
+  for (let i = 0; i < octaves; i++) {
     f += amp * vnoise(x * fr, y * fr);
     fr *= 2;
     amp *= 0.5;
@@ -46,8 +46,20 @@ export function heightAt(x: number, z: number) {
   const ridges = Math.pow(Math.abs(Math.sin(th * 5 + r * 0.04)), 3) * Math.min(1, r / 15) * Math.exp(-r / 60) * 5;
   const n = (fbm(x * 0.05 + 10, z * 0.05 + 10) - 0.5) * 6 * Math.min(1, r / 12);
   const dome = r < 6 ? (fbm(x * 0.3, z * 0.3) - 0.5) * 0.6 : 0;
-  return base + ridges + n + dome;
+  // Eroded gullies and rock ribs running down the flanks.
+  const flank = Math.min(1, r / 10) * Math.exp(-r / 85);
+  const ridged = 1 - Math.abs(fbm(x * 0.11 - 4, z * 0.11 + 9, 5) * 2 - 1);
+  const gullies = (ridged * ridged - 0.35) * 2.4 * flank;
+  // Fine surface texture: seracs, moraine and rock steps.
+  const detail = (fbm(x * 0.35 + 3, z * 0.35 - 6, 3) - 0.5) * 0.9 * Math.min(1, r / 8);
+  return base + ridges + n + dome + gullies + detail;
 }
+
+const smooth = (a: number, b: number, v: number) => {
+  const t = Math.max(0, Math.min(1, (v - a) / (b - a)));
+  return t * t * (3 - 2 * t);
+};
+const mix3 = (a: Vec3, b: Vec3, t: number): Vec3 => [a[0] + (b[0] - a[0]) * t, a[1] + (b[1] - a[1]) * t, a[2] + (b[2] - a[2]) * t];
 
 export function ftToY(ft: number) {
   return (MOUNTAIN_H * (ft - FT_BASE)) / (FT_TOP - FT_BASE);
@@ -101,24 +113,40 @@ export function nodePosition(i: number): Vec3 {
   return ROUTE.pts[ROUTE.nodeIndex[i]];
 }
 
-/** Vertex color for a terrain point. Returns [r, g, b] in 0..1. */
+// Linear-space colors, picked from photos of the mountain in July.
+const FOREST: Vec3 = [0.035, 0.07, 0.04];
+const MEADOW: Vec3 = [0.16, 0.2, 0.08];
+const ROCK: Vec3 = [0.16, 0.14, 0.13];
+const ROCK_DARK: Vec3 = [0.07, 0.065, 0.065];
+const ROCK_RED: Vec3 = [0.2, 0.12, 0.09]; // oxidized andesite, like the Cleaver
+const SNOW: Vec3 = [0.86, 0.89, 0.93];
+const GLACIER: Vec3 = [0.6, 0.74, 0.86];
+
+/** Vertex color for a terrain point. Returns [r, g, b] in 0..1 (linear). */
 export function terrainColor(x: number, y: number, z: number, slope: number): Vec3 {
   const n = fbm(x * 0.12, z * 0.12);
-  const snowline = ftToY(6800) + (n - 0.5) * 6;
+  const fine = fbm(x * 0.6 + 3, z * 0.6 - 2, 3);
   const treeline = ftToY(5900) + (n - 0.5) * 4;
-  if (y < treeline) {
-    // Subalpine forest and meadow around Paradise.
-    const g = 0.25 + n * 0.15;
-    return [0.13 + n * 0.08, g, 0.15];
-  }
-  const rocky = slope > 1.05 || (fbm(x * 0.07 + 40, z * 0.07) > 0.68 && y < ftToY(13500));
-  if (y < snowline || rocky) {
-    const v = 0.26 + n * 0.14;
-    return [v + 0.05, v, v - 0.02];
-  }
-  // Snow and glacier ice, a little bluer where the glaciers flow.
-  const ice = fbm(x * 0.04 - 20, z * 0.04 + 7);
-  const blue = ice > 0.55 ? (ice - 0.55) * 0.6 : 0;
-  const shade = 0.9 + n * 0.1;
-  return [shade - blue * 0.6, shade - blue * 0.25, Math.min(1, shade + 0.04)];
+  const snowline = ftToY(6800) + (n - 0.5) * 7;
+
+  // Bare ground: forest and meadow low down, rock above.
+  let rock = mix3(ROCK, ROCK_DARK, smooth(0.35, 0.75, fine));
+  rock = mix3(rock, ROCK_RED, smooth(0.6, 0.8, fbm(x * 0.05 + 40, z * 0.05 - 13)) * 0.7);
+  const green = mix3(FOREST, MEADOW, smooth(0.45, 0.7, n));
+  let c = mix3(rock, green, 1 - smooth(treeline - 1.5, treeline + 1.5, y));
+
+  // Snow and glacier cover everything above the snowline except the steepest ground for that
+  // height (rock ribs like the Cleaver) and a few wind-scoured buttresses. The cone steepens
+  // with height, so "steep" is measured against the typical slope at this elevation.
+  const typical = Math.min(1.85, 0.12 + 0.04 * Math.max(0, y));
+  const steep = smooth(typical * 1.2, typical * 1.5, slope);
+  const scoured = smooth(0.7, 0.76, fbm(x * 0.07 + 40, z * 0.07)) * (1 - smooth(ftToY(12500), ftToY(13500), y)) * 0.6;
+  const cover = smooth(snowline - 2, snowline + 2, y) * (1 - steep) * (1 - scoured);
+  const ice = smooth(0.5, 0.65, fbm(x * 0.04 - 20, z * 0.04 + 7)) * smooth(ftToY(7500), ftToY(9000), y);
+  const snow = mix3(SNOW, GLACIER, ice * 0.6);
+  c = mix3(c, snow, cover);
+
+  // Soft cavity shading so gullies read without real-time shadows.
+  const shade = 0.82 + 0.18 * fine;
+  return [c[0] * shade, c[1] * shade, c[2] * shade];
 }

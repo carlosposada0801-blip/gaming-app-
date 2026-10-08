@@ -1,7 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
-import {
-  PanResponder, Pressable, ScrollView, StyleSheet, Text, View, useWindowDimensions,
-} from 'react-native';
+import { PanResponder, Pressable, ScrollView, StyleSheet, Text, View, useWindowDimensions } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import * as Haptics from 'expo-haptics';
 import {
@@ -15,7 +13,7 @@ import type { GameState, LogEntry, Stats } from '../game/types';
 import { MountainScene, type CameraControl } from '../scene/MountainScene';
 import { C, NUM, climberLook, partnerLook, statColor } from './theme';
 
-const STAT_ROWS: { key: keyof Stats; label: string; inverted?: boolean }[] = [
+const VITALS: { key: keyof Stats; label: string; inverted?: boolean }[] = [
   { key: 'stamina', label: 'Stamina' },
   { key: 'warmth', label: 'Warmth' },
   { key: 'hydration', label: 'Water' },
@@ -24,7 +22,11 @@ const STAT_ROWS: { key: keyof Stats; label: string; inverted?: boolean }[] = [
   { key: 'morale', label: 'Morale' },
 ];
 
+/** Everyday actions that get a one-tap button; everything else lives under Options. */
+const QUICK = ['drink', 'eat', 'layer:up', 'layer:down', 'rest'];
+
 const TONE_COLOR: Record<NonNullable<LogEntry['tone']>, string> = { good: C.good, bad: C.bad, info: C.ice };
+const GLASS = 'rgba(10,17,26,0.78)';
 
 const fire = (p: Promise<void>) => { p.catch(() => {}); };
 
@@ -39,11 +41,10 @@ export function ClimbScreen({
 }) {
   const insets = useSafeAreaInsets();
   const { height } = useWindowDimensions();
-  const sceneH = Math.round(height * 0.55);
 
   const control = useRef<CameraControl>({ yaw: 0, dist: 6, overview: false });
   const [overview, setOverview] = useState(false);
-  const [notesOpen, setNotesOpen] = useState(false);
+  const [sheet, setSheet] = useState<'none' | 'options' | 'notes'>('none');
 
   const drag = useRef({ yaw: 0, dist: 6 });
   const pan = useMemo(
@@ -61,7 +62,6 @@ export function ClimbScreen({
     [],
   );
 
-  // Warn when an event appears.
   useEffect(() => {
     if (state.pendingEvent) fire(Haptics.notificationAsync(Haptics.NotificationFeedbackType.Warning));
   }, [state.pendingEvent]);
@@ -85,10 +85,16 @@ export function ClimbScreen({
     onState(next);
   }
 
+  const act = (id: string) => {
+    setSheet('none');
+    commit(doAction(state, id));
+  };
+
   const node = NODES[state.node];
   const actions = listActions(state);
   const primary = actions.filter((a) => a.primary);
-  const secondary = actions.filter((a) => !a.primary);
+  const quick = QUICK.map((id) => actions.find((a) => a.id === id)).filter((a): a is Action => !!a);
+  const more = actions.filter((a) => !a.primary && !QUICK.includes(a.id));
   const blocked = moveBlockedReason(state);
   const trend = warmthTrend(state);
   const event = state.pendingEvent ? EVENT_BY_ID[state.pendingEvent] : null;
@@ -96,8 +102,8 @@ export function ClimbScreen({
 
   return (
     <View style={styles.root}>
-      {/* ---------- 3D scene + HUD ---------- */}
-      <View style={{ height: sceneH }}>
+      {/* ---------- full-screen mountain ---------- */}
+      <View style={StyleSheet.absoluteFill}>
         <MountainScene
           node={state.node}
           clock={state.clock}
@@ -108,54 +114,37 @@ export function ClimbScreen({
           wands={!!state.flags.wandsPlaced}
           mode="follow"
           control={control}
+          viewShift={0.16}
         />
-        <View style={StyleSheet.absoluteFill} {...pan.panHandlers} />
+      </View>
+      <View style={StyleSheet.absoluteFill} {...pan.panHandlers} />
 
-        <View style={[styles.hud, { top: insets.top + 8 }]} pointerEvents="none">
-          <View style={styles.hudBox}>
-            <Text style={styles.hudName} numberOfLines={1}>{node.name}</Text>
-            <Text style={[styles.hudBig, NUM]}>{formatFt(node.ft)}</Text>
-            <Text style={styles.hudSmall}>{state.dir === 'up' ? 'Ascending' : 'Descending'}</Text>
+      {/* ---------- top HUD ---------- */}
+      <View style={[styles.top, { paddingTop: insets.top + 8 }]} pointerEvents="box-none">
+        <View style={styles.topRow} pointerEvents="box-none">
+          <View style={styles.chip} pointerEvents="none">
+            <Text style={styles.place} numberOfLines={1}>{node.name.toUpperCase()}</Text>
+            <Text style={[styles.big, NUM]}>{formatFt(node.ft)}</Text>
           </View>
-          <View style={[styles.hudBox, { alignItems: 'flex-end' }]}>
-            <Text style={[styles.hudBig, NUM]}>{formatClock(state.clock)}</Text>
-            <Text style={styles.hudSmall}>Day {dayOf(state.clock)}</Text>
-            <Text style={[styles.hudWeather, state.weather !== 'clear' && { color: C.warn }]}>
-              {WEATHER_LABEL[state.weather]}
-            </Text>
+          <View style={[styles.chip, { alignItems: 'flex-end' }]} pointerEvents="none">
+            <Text style={[styles.place, NUM]}>DAY {dayOf(state.clock)} · {state.dir === 'up' ? 'ASCENT' : 'DESCENT'}</Text>
+            <Text style={[styles.big, NUM]}>{formatClock(state.clock)}</Text>
           </View>
         </View>
 
-        <Pressable
-          style={styles.viewToggle}
-          onPress={() => {
-            control.current.overview = !control.current.overview;
-            control.current.yaw = 0;
-            setOverview(control.current.overview);
-          }}
-          accessibilityRole="button"
-        >
-          <Text style={styles.viewToggleText}>{overview ? 'Climber view' : 'Route view'}</Text>
-        </Pressable>
-        <Text style={styles.dragHint} pointerEvents="none">Drag to look around</Text>
-      </View>
-
-      {/* ---------- stats, story, actions ---------- */}
-      <ScrollView style={styles.lower} contentContainerStyle={{ padding: 16, gap: 14, paddingBottom: insets.bottom + 24 }}>
-        <View style={styles.stats}>
-          {STAT_ROWS.map(({ key, label, inverted }) => {
+        <View style={styles.vitals} pointerEvents="none">
+          {VITALS.map(({ key, label, inverted }) => {
             const v = state.stats[key];
             const color = statColor(v, inverted);
+            const arrow = key === 'warmth' && trend !== 'ok' ? (trend === 'cold' ? ' ↓' : ' ↑') : '';
             return (
-              <View key={key} style={styles.stat}>
-                <View style={styles.statTop}>
-                  <Text style={styles.statLabel}>
-                    {label.toUpperCase()}
-                    {key === 'warmth' && trend !== 'ok' ? (
-                      <Text style={{ color: trend === 'cold' ? C.ice : C.warn }}>{trend === 'cold' ? '  ↓ COLD' : '  ↑ SWEATING'}</Text>
-                    ) : null}
+              <View key={key} style={styles.vital}>
+                <View style={styles.vitalTop}>
+                  <Text style={styles.vitalLabel}>
+                    {label}
+                    {arrow ? <Text style={{ color: trend === 'cold' ? C.ice : C.warn }}>{arrow}</Text> : null}
                   </Text>
-                  <Text style={[styles.statNum, NUM, { color }]}>{Math.round(v)}</Text>
+                  <Text style={[styles.vitalNum, NUM, { color }]}>{Math.round(v)}</Text>
                 </View>
                 <View style={styles.track}>
                   <View style={[styles.fill, { width: `${Math.max(0, Math.min(100, v))}%`, backgroundColor: color }]} />
@@ -164,75 +153,135 @@ export function ClimbScreen({
             );
           })}
         </View>
-        <Text style={[styles.kit, NUM]}>
-          {LAYER_LABEL[state.layer]} · {state.water.toFixed(1)} L water · {state.food} food
-        </Text>
 
-        {state.lastOutcome ? (
-          <View style={styles.outcome}>
-            <Text style={styles.outcomeText}>{state.lastOutcome}</Text>
-          </View>
-        ) : null}
+        <View style={styles.subRow} pointerEvents="box-none">
+          <Text style={[styles.weather, state.weather !== 'clear' && { color: C.warn }]} pointerEvents="none">
+            {WEATHER_LABEL[state.weather]} · {LAYER_LABEL[state.layer]}
+          </Text>
+          <Pressable
+            style={styles.smallChip}
+            onPress={() => {
+              control.current.overview = !control.current.overview;
+              control.current.yaw = 0;
+              setOverview(control.current.overview);
+            }}
+            accessibilityRole="button"
+          >
+            <Text style={styles.smallChipText}>{overview ? 'Climber' : 'Route'}</Text>
+          </Pressable>
+        </View>
+      </View>
 
+      {/* ---------- bottom panel ---------- */}
+      <View style={[styles.panel, { paddingBottom: insets.bottom + 12 }]}>
         {ending ? (
-          <View style={[styles.endCard, { borderColor: ending.good ? C.good : C.bad }]}>
+          <>
             <Text style={[styles.endTitle, { color: ending.good ? C.good : C.bad }]}>{ending.title}</Text>
-            <Text style={styles.body}>{ending.body}</Text>
+            <Text style={styles.caption}>{state.lastOutcome ?? ending.body}</Text>
             <Pressable style={styles.primaryBtn} onPress={onFinish} accessibilityRole="button">
               <Text style={styles.primaryText}>See your debrief</Text>
             </Pressable>
-          </View>
+          </>
         ) : (
           <>
-            <Text style={styles.body}>{node.desc}</Text>
+            <Text style={state.lastOutcome ? styles.outcome : styles.caption} numberOfLines={5}>
+              {state.lastOutcome ?? node.desc}
+            </Text>
             {blocked ? <Text style={styles.blocked}>{blocked}</Text> : null}
-            <View style={{ gap: 8 }}>
-              {primary.map((a) => (
-                <ActionButton key={a.id} action={a} big onPress={() => commit(doAction(state, a.id))} />
+            {primary.map((a) => (
+              <Pressable
+                key={a.id}
+                disabled={a.disabled}
+                onPress={() => act(a.id)}
+                style={({ pressed }) => [styles.primaryBtn, a.disabled && { opacity: 0.4 }, pressed && { opacity: 0.85 }]}
+                accessibilityRole="button"
+              >
+                <Text style={styles.primaryText}>{a.label}</Text>
+                {a.detail ? <Text style={[styles.primaryDetail, NUM]}>{a.detail}</Text> : null}
+              </Pressable>
+            ))}
+            <View style={styles.quickRow}>
+              {quick.map((a) => (
+                <Pressable
+                  key={a.id}
+                  disabled={a.disabled}
+                  onPress={() => act(a.id)}
+                  style={({ pressed }) => [styles.quick, a.disabled && { opacity: 0.35 }, pressed && { backgroundColor: C.line }]}
+                  accessibilityRole="button"
+                  accessibilityLabel={`${a.label}. ${a.detail ?? ''}`}
+                >
+                  <Text style={styles.quickLabel}>{quickLabel(a.id)}</Text>
+                  <Text style={[styles.quickDetail, NUM]} numberOfLines={1}>{quickDetail(a.id, state)}</Text>
+                </Pressable>
               ))}
             </View>
-            <View style={styles.grid}>
-              {secondary.map((a) => (
-                <ActionButton key={a.id} action={a} onPress={() => commit(doAction(state, a.id))} />
-              ))}
+            <View style={styles.linkRow}>
+              <Pressable onPress={() => setSheet('options')} hitSlop={8} accessibilityRole="button">
+                <Text style={styles.link}>Options{more.length ? ` (${more.length})` : ''}</Text>
+              </Pressable>
+              <Pressable onPress={() => setSheet('notes')} hitSlop={8} accessibilityRole="button">
+                <Text style={styles.link}>Field notes</Text>
+              </Pressable>
             </View>
           </>
         )}
+      </View>
 
-        <Pressable onPress={() => setNotesOpen((o) => !o)} style={styles.notesHead} accessibilityRole="button">
-          <Text style={styles.notesTitle}>FIELD NOTES</Text>
-          <Text style={styles.notesToggle}>{notesOpen ? 'Hide' : `Show ${state.log.length}`}</Text>
-        </Pressable>
-        {notesOpen && (
-          <View style={{ gap: 8 }}>
-            {state.log.map((e, i) => (
-              <View key={i} style={styles.note}>
-                <Text style={[styles.noteClock, NUM]}>{formatClock(e.clock)}</Text>
-                <Text style={[styles.noteText, e.tone && { color: TONE_COLOR[e.tone] }]}>{e.text}</Text>
-              </View>
-            ))}
+      {/* ---------- options / notes sheets ---------- */}
+      {sheet !== 'none' && !event && (
+        <View style={styles.scrim}>
+          <Pressable style={StyleSheet.absoluteFill} onPress={() => setSheet('none')} accessibilityLabel="Close" />
+          <View style={[styles.sheet, { paddingBottom: insets.bottom + 16, maxHeight: height * 0.75 }]}>
+            <View style={styles.sheetHead}>
+              <Text style={styles.sheetTitle}>{sheet === 'options' ? 'Options' : 'Field notes'}</Text>
+              <Pressable onPress={() => setSheet('none')} hitSlop={10} accessibilityRole="button">
+                <Text style={styles.link}>Done</Text>
+              </Pressable>
+            </View>
+            <ScrollView contentContainerStyle={{ gap: 8 }}>
+              {sheet === 'options'
+                ? more.map((a) => (
+                  <Pressable
+                    key={a.id}
+                    disabled={a.disabled}
+                    onPress={() => act(a.id)}
+                    style={({ pressed }) => [styles.row, a.disabled && { opacity: 0.4 }, pressed && { backgroundColor: C.line }]}
+                    accessibilityRole="button"
+                  >
+                    <Text style={styles.rowText}>{a.label}</Text>
+                    {a.detail ? <Text style={[styles.rowDetail, NUM]}>{a.detail}</Text> : null}
+                  </Pressable>
+                ))
+                : state.log.map((e, i) => (
+                  <View key={i} style={styles.note}>
+                    <Text style={[styles.noteClock, NUM]}>{formatClock(e.clock)}</Text>
+                    <Text style={[styles.noteText, e.tone && { color: TONE_COLOR[e.tone] }]}>{e.text}</Text>
+                  </View>
+                ))}
+            </ScrollView>
           </View>
-        )}
-      </ScrollView>
+        </View>
+      )}
 
       {/* ---------- event sheet ---------- */}
       {event && (
         <View style={styles.scrim}>
           <View style={[styles.sheet, { paddingBottom: insets.bottom + 16, maxHeight: height * 0.8 }]}>
             <ScrollView contentContainerStyle={{ gap: 12 }}>
+              <Text style={styles.eventKicker}>{node.name.toUpperCase()} · {formatClock(state.clock)}</Text>
               <Text style={styles.sheetTitle}>{event.title}</Text>
-              <Text style={styles.sheetText}>{event.text(state)}</Text>
+              <Text style={styles.eventText}>{event.text(state)}</Text>
               <View style={{ gap: 8, marginTop: 4 }}>
                 {eventChoices(state).map((ch, i) => (
                   <Pressable
                     key={i}
                     disabled={ch.disabled}
                     onPress={() => commit(chooseEvent(state, i))}
-                    style={({ pressed }) => [styles.choice, ch.disabled && { opacity: 0.45 }, pressed && { backgroundColor: C.line }]}
+                    style={({ pressed }) => [styles.row, ch.disabled && { opacity: 0.45 }, pressed && { backgroundColor: C.line }]}
                     accessibilityRole="button"
                     accessibilityState={{ disabled: !!ch.disabled }}
                   >
-                    <Text style={styles.choiceText}>{ch.label}</Text>
+                    <Text style={styles.rowText}>{ch.label}</Text>
                     {ch.hint ? <Text style={styles.choiceHint}>{ch.hint}</Text> : null}
                   </Pressable>
                 ))}
@@ -245,78 +294,81 @@ export function ClimbScreen({
   );
 }
 
-function ActionButton({ action, big, onPress }: { action: Action; big?: boolean; onPress: () => void }) {
-  return (
-    <Pressable
-      disabled={action.disabled}
-      onPress={onPress}
-      style={({ pressed }) => [
-        big ? styles.primaryBtn : styles.smallBtn,
-        action.disabled && { opacity: 0.4 },
-        pressed && { opacity: 0.8 },
-      ]}
-      accessibilityRole="button"
-      accessibilityState={{ disabled: !!action.disabled }}
-    >
-      <Text style={big ? styles.primaryText : styles.smallText}>{action.label}</Text>
-      {action.detail ? <Text style={[big ? styles.primaryDetail : styles.smallDetail, NUM]}>{action.detail}</Text> : null}
-    </Pressable>
-  );
+function quickLabel(id: string) {
+  return { drink: 'Drink', eat: 'Eat', 'layer:up': 'Layer +', 'layer:down': 'Layer −', rest: 'Break' }[id] ?? id;
+}
+
+function quickDetail(id: string, s: GameState) {
+  switch (id) {
+    case 'drink': return `${s.water.toFixed(1)} L`;
+    case 'eat': return `${s.food} left`;
+    case 'layer:up': return s.layer < 3 ? LAYER_LABEL[(s.layer + 1) as 0 | 1 | 2 | 3] : 'All on';
+    case 'layer:down': return s.layer > 0 ? LAYER_LABEL[(s.layer - 1) as 0 | 1 | 2 | 3] : 'Base';
+    case 'rest': return '20 min';
+    default: return '';
+  }
 }
 
 const styles = StyleSheet.create({
   root: { flex: 1, backgroundColor: C.bg },
-  hud: { position: 'absolute', left: 12, right: 12, flexDirection: 'row', justifyContent: 'space-between', gap: 8 },
-  hudBox: { backgroundColor: 'rgba(12,20,30,0.72)', borderRadius: 10, paddingVertical: 7, paddingHorizontal: 10, maxWidth: '55%' },
-  hudName: { color: C.ice, fontSize: 12, fontWeight: '700', letterSpacing: 0.4 },
-  hudBig: { color: C.text, fontSize: 19, fontWeight: '800' },
-  hudSmall: { color: C.muted, fontSize: 11 },
-  hudWeather: { color: C.good, fontSize: 12, fontWeight: '700', marginTop: 1 },
-  viewToggle: {
-    position: 'absolute', right: 12, bottom: 10, backgroundColor: 'rgba(12,20,30,0.78)', borderRadius: 999,
-    borderWidth: 1, borderColor: C.line, paddingVertical: 7, paddingHorizontal: 13,
+
+  top: { position: 'absolute', left: 0, right: 0, top: 0, paddingHorizontal: 12, gap: 8 },
+  topRow: { flexDirection: 'row', justifyContent: 'space-between', gap: 8 },
+  chip: { backgroundColor: GLASS, borderRadius: 12, paddingVertical: 7, paddingHorizontal: 11, maxWidth: '58%' },
+  place: { color: C.ice, fontSize: 10, fontWeight: '800', letterSpacing: 1.1 },
+  big: { color: C.text, fontSize: 20, fontWeight: '800', marginTop: 1 },
+  vitals: {
+    flexDirection: 'row', flexWrap: 'wrap', rowGap: 7, columnGap: 12, backgroundColor: GLASS, borderRadius: 12,
+    paddingVertical: 9, paddingHorizontal: 11,
   },
-  viewToggleText: { color: C.ice, fontSize: 12, fontWeight: '700' },
-  dragHint: { position: 'absolute', left: 12, bottom: 14, color: 'rgba(231,238,245,0.6)', fontSize: 11 },
-  lower: { flex: 1, borderTopWidth: 1, borderTopColor: C.line },
-  stats: { flexDirection: 'row', flexWrap: 'wrap', rowGap: 10, columnGap: 14 },
-  stat: { width: '30%', flexGrow: 1 },
-  statTop: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'baseline', marginBottom: 4 },
-  statLabel: { color: C.faint, fontSize: 10, fontWeight: '800', letterSpacing: 0.8, flexShrink: 1 },
-  statNum: { fontSize: 13, fontWeight: '800' },
-  track: { height: 5, backgroundColor: C.raised, borderRadius: 3, overflow: 'hidden' },
-  fill: { height: '100%', borderRadius: 3 },
-  kit: { color: C.muted, fontSize: 12 },
-  outcome: { backgroundColor: C.panel, borderLeftWidth: 3, borderLeftColor: C.ice, borderRadius: 8, padding: 12 },
-  outcomeText: { color: C.text, fontSize: 14, lineHeight: 20 },
-  body: { color: C.muted, fontSize: 14, lineHeight: 20 },
+  vital: { width: '29%', flexGrow: 1 },
+  vitalTop: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'baseline', marginBottom: 3 },
+  vitalLabel: { color: C.muted, fontSize: 10, fontWeight: '700', letterSpacing: 0.4 },
+  vitalNum: { fontSize: 11, fontWeight: '800' },
+  track: { height: 3, backgroundColor: 'rgba(255,255,255,0.12)', borderRadius: 2, overflow: 'hidden' },
+  fill: { height: '100%', borderRadius: 2 },
+  subRow: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center' },
+  weather: {
+    color: C.good, fontSize: 11, fontWeight: '700', backgroundColor: GLASS, borderRadius: 999, overflow: 'hidden',
+    paddingVertical: 4, paddingHorizontal: 10,
+  },
+  smallChip: { backgroundColor: GLASS, borderRadius: 999, paddingVertical: 5, paddingHorizontal: 12 },
+  smallChipText: { color: C.ice, fontSize: 12, fontWeight: '700' },
+
+  panel: {
+    position: 'absolute', left: 0, right: 0, bottom: 0, backgroundColor: 'rgba(10,17,26,0.9)',
+    borderTopLeftRadius: 20, borderTopRightRadius: 20, paddingHorizontal: 16, paddingTop: 14, gap: 10,
+  },
+  caption: { color: C.muted, fontSize: 14, lineHeight: 20 },
+  outcome: { color: C.text, fontSize: 14, lineHeight: 20 },
   blocked: { color: C.warn, fontSize: 13, fontWeight: '600' },
-  grid: { flexDirection: 'row', flexWrap: 'wrap', gap: 8 },
-  primaryBtn: { backgroundColor: C.accent, borderRadius: 12, paddingVertical: 13, paddingHorizontal: 16, alignItems: 'center' },
+  primaryBtn: { backgroundColor: C.accent, borderRadius: 14, paddingVertical: 13, paddingHorizontal: 16, alignItems: 'center' },
   primaryText: { color: '#1a0b03', fontSize: 16, fontWeight: '800' },
-  primaryDetail: { color: '#3d1a08', fontSize: 12, marginTop: 2 },
-  smallBtn: {
-    width: '48.5%', backgroundColor: C.panel, borderWidth: 1, borderColor: C.line, borderRadius: 10,
-    paddingVertical: 10, paddingHorizontal: 12,
+  primaryDetail: { color: '#4a2109', fontSize: 12, marginTop: 1 },
+  quickRow: { flexDirection: 'row', gap: 6 },
+  quick: {
+    flex: 1, backgroundColor: 'rgba(255,255,255,0.06)', borderRadius: 10, paddingVertical: 8, alignItems: 'center',
+    borderWidth: 1, borderColor: 'rgba(255,255,255,0.07)',
   },
-  smallText: { color: C.text, fontSize: 14, fontWeight: '700' },
-  smallDetail: { color: C.faint, fontSize: 11, marginTop: 2 },
-  endCard: { borderWidth: 1, borderRadius: 12, padding: 14, gap: 10, backgroundColor: C.panel },
-  endTitle: { fontSize: 20, fontWeight: '800' },
-  notesHead: { flexDirection: 'row', justifyContent: 'space-between', paddingTop: 6, borderTopWidth: 1, borderTopColor: C.line },
-  notesTitle: { color: C.accent, fontSize: 11, fontWeight: '800', letterSpacing: 1.4, paddingTop: 8 },
-  notesToggle: { color: C.ice, fontSize: 13, fontWeight: '600', paddingTop: 8 },
+  quickLabel: { color: C.text, fontSize: 13, fontWeight: '700' },
+  quickDetail: { color: C.faint, fontSize: 10, marginTop: 1 },
+  linkRow: { flexDirection: 'row', justifyContent: 'space-between', paddingHorizontal: 2, paddingTop: 2 },
+  link: { color: C.ice, fontSize: 14, fontWeight: '600' },
+  endTitle: { fontSize: 22, fontWeight: '800' },
+
+  scrim: { position: 'absolute', top: 0, right: 0, bottom: 0, left: 0, backgroundColor: 'rgba(5,9,14,0.55)', justifyContent: 'flex-end' },
+  sheet: {
+    backgroundColor: C.panel, borderTopLeftRadius: 20, borderTopRightRadius: 20, paddingHorizontal: 18, paddingTop: 18, gap: 12,
+  },
+  sheetHead: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center' },
+  sheetTitle: { color: C.text, fontSize: 22, fontWeight: '800' },
+  eventKicker: { color: C.accent, fontSize: 11, fontWeight: '800', letterSpacing: 1.2 },
+  eventText: { color: C.text, fontSize: 15, lineHeight: 22 },
+  row: { backgroundColor: C.raised, borderRadius: 12, paddingVertical: 12, paddingHorizontal: 14 },
+  rowText: { color: C.text, fontSize: 15, fontWeight: '700' },
+  rowDetail: { color: C.muted, fontSize: 12, marginTop: 2 },
+  choiceHint: { color: C.warn, fontSize: 12, marginTop: 3 },
   note: { flexDirection: 'row', gap: 10 },
   noteClock: { color: C.faint, fontSize: 12, width: 64 },
   noteText: { color: C.muted, fontSize: 13, lineHeight: 18, flex: 1 },
-  scrim: { position: 'absolute', top: 0, right: 0, bottom: 0, left: 0, backgroundColor: 'rgba(5,9,14,0.6)', justifyContent: 'flex-end' },
-  sheet: {
-    backgroundColor: C.panel, borderTopLeftRadius: 18, borderTopRightRadius: 18, borderTopWidth: 1, borderColor: C.line,
-    paddingHorizontal: 18, paddingTop: 18,
-  },
-  sheetTitle: { color: C.text, fontSize: 22, fontWeight: '800' },
-  sheetText: { color: C.text, fontSize: 15, lineHeight: 22 },
-  choice: { backgroundColor: C.raised, borderRadius: 10, paddingVertical: 12, paddingHorizontal: 14, borderWidth: 1, borderColor: C.line },
-  choiceText: { color: C.text, fontSize: 15, fontWeight: '700' },
-  choiceHint: { color: C.warn, fontSize: 12, marginTop: 3 },
 });

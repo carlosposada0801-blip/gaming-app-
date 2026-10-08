@@ -38,11 +38,16 @@ See AGENTS.md for Expo rules (use `npx expo install`, check versioned docs).
 - `src/ui/PackScreen.tsx`: gear packing screen with weights and a "guide's list" button.
 
 - `src/ui/TitleScreen.tsx`: orbiting mountain behind the title, best score, "Pack your gear".
-- `src/ui/ClimbScreen.tsx`: follow-cam scene (top 55%) with drag to orbit/zoom and a route-view
-  toggle, HUD (location, elevation, clock, day, weather), six stat bars with warmth trend,
-  last outcome, node description, actions from `listActions`, event sheet with disabled-choice
-  hints, ending card, collapsible field notes, haptics (warning on events, success on summit,
-  error on bad outcomes).
+- `src/ui/ClimbScreen.tsx`: full-screen follow-cam scene (drag to orbit/zoom, route-view toggle,
+  `viewShift` keeps the climber above the bottom panel); glass HUD with location, elevation,
+  clock, day, compact vitals with warmth trend, weather and layer; bottom panel with the outcome
+  or node text, primary action, quick buttons (drink, eat, layer +/−, break), an Options sheet
+  for the rest of `listActions`, a Field notes sheet, the event sheet, and the ending card.
+  Haptics: warning on events, success on summit, error on bad outcomes.
+- Realism pass: smooth-shaded 300×300 terrain with eroded gullies; snow cover measured against the
+  typical slope for each elevation (rock ribs stay bare); forest → meadow → rock → snow → glacier
+  blending; gradient sky dome with sun disc; aerial haze; boot-track route (orange only in route
+  view); crevasses with ice lips; dome tents and roofed huts at Muir; climbers built from capsules.
 - `src/ui/EndScreen.tsx`: ending title/body/lesson, score (with "New best"), time on route,
   high point, gear review tips, "Climb again" (keeps the packed list) and "Title".
 - `src/ui/storage.ts`: best score in AsyncStorage.

@@ -25,6 +25,8 @@ export interface SceneProps {
   /** 'follow' tracks the climber, 'orbit' slowly circles the mountain (title screen). */
   mode: 'follow' | 'orbit';
   control: React.MutableRefObject<CameraControl>;
+  /** Fraction of the screen height to move the view up, for UI covering the bottom. */
+  viewShift?: number;
 }
 
 // ---------- static world pieces ----------
@@ -52,19 +54,30 @@ function Terrain() {
   }, []);
   return (
     <mesh geometry={geometry}>
-      <meshStandardMaterial vertexColors flatShading roughness={0.95} />
+      <meshStandardMaterial vertexColors roughness={0.92} metalness={0} />
     </mesh>
   );
 }
 
-function RouteLine() {
+const TRACK = new THREE.Color('#5b4f45');
+const TRACK_HIGHLIGHT = new THREE.Color('#ff6a2b');
+
+/** The boot track: a faint trench in the snow, highlighted orange in route view. */
+function RouteLine({ highlight }: { highlight: React.MutableRefObject<number> }) {
   const geometry = useMemo(() => {
-    const curve = new THREE.CatmullRomCurve3(ROUTE.pts.map(([x, y, z]) => new THREE.Vector3(x, y + 0.08, z)));
-    return new THREE.TubeGeometry(curve, ROUTE.pts.length * 3, 0.07, 4, false);
+    const curve = new THREE.CatmullRomCurve3(ROUTE.pts.map(([x, y, z]) => new THREE.Vector3(x, y + 0.04, z)));
+    return new THREE.TubeGeometry(curve, ROUTE.pts.length * 4, 0.05, 5, false);
   }, []);
+  const mat = useRef<THREE.MeshBasicMaterial>(null);
+  useFrame(() => {
+    if (!mat.current) return;
+    const h = highlight.current;
+    mat.current.color.copy(TRACK).lerp(TRACK_HIGHLIGHT, h);
+    mat.current.opacity = 0.45 + 0.4 * h;
+  });
   return (
     <mesh geometry={geometry}>
-      <meshBasicMaterial color="#e2572b" transparent opacity={0.75} />
+      <meshBasicMaterial ref={mat} color={TRACK} transparent opacity={0.45} depthWrite={false} />
     </mesh>
   );
 }
@@ -100,16 +113,30 @@ function RouteMarkers({ wands }: { wands: boolean }) {
       {camps.map((p, i) => <Wand key={i} p={[p[0] - 0.8, p[1], p[2]]} />)}
       {wands && wandPts.map((p, i) => <Wand key={`w${i}`} p={p} />)}
       {/* Camp Muir: the stone huts and a couple of tents */}
-      {[[-2.2, 0.4], [-1.2, 1.8]].map(([dx, dz], i) => (
-        <mesh key={`hut${i}`} position={[muir[0] + dx, heightAt(muir[0] + dx, muir[2] + dz) + 0.45, muir[2] + dz]}>
-          <boxGeometry args={[1.6, 0.9, 1.0]} />
-          <meshStandardMaterial color="#6f6a63" flatShading />
-        </mesh>
-      ))}
+      {[[-2.2, 0.4], [-1.2, 1.8]].map(([dx, dz], i) => {
+        const y = heightAt(muir[0] + dx, muir[2] + dz);
+        return (
+          <group key={`hut${i}`} position={[muir[0] + dx, y, muir[2] + dz]}>
+            <mesh position={[0, 0.4, 0]}>
+              <boxGeometry args={[1.6, 0.8, 1.0]} />
+              <meshStandardMaterial color="#6b655d" roughness={1} />
+            </mesh>
+            <mesh position={[0, 0.84, 0]}>
+              <boxGeometry args={[1.7, 0.08, 1.1]} />
+              <meshStandardMaterial color="#3d4248" roughness={0.8} />
+            </mesh>
+          </group>
+        );
+      })}
       {[[1.8, 0.6, '#e8b923'], [2.6, -0.6, '#d9472b']].map(([dx, dz, c], i) => (
-        <mesh key={`tent${i}`} position={[muir[0] + (dx as number), heightAt(muir[0] + (dx as number), muir[2] + (dz as number)) + 0.3, muir[2] + (dz as number)]} rotation={[0, 0.6, 0]}>
-          <coneGeometry args={[0.55, 0.6, 4]} />
-          <meshStandardMaterial color={c as string} flatShading />
+        <mesh
+          key={`tent${i}`}
+          position={[muir[0] + (dx as number), heightAt(muir[0] + (dx as number), muir[2] + (dz as number)), muir[2] + (dz as number)]}
+          rotation={[0, 0.6, 0]}
+          scale={[0.42, 0.3, 0.32]}
+        >
+          <sphereGeometry args={[1, 20, 10, 0, Math.PI * 2, 0, Math.PI / 2]} />
+          <meshStandardMaterial color={c as string} roughness={0.6} />
         </mesh>
       ))}
     </group>
@@ -139,10 +166,16 @@ function Crevasses() {
   return (
     <group>
       {slabs.map((c, i) => (
-        <mesh key={i} position={c.p} rotation={[0, c.rot, 0]}>
-          <boxGeometry args={[0.35, 0.06, c.len]} />
-          <meshBasicMaterial color="#1a3550" />
-        </mesh>
+        <group key={i} position={c.p} rotation={[0, c.rot, 0]}>
+          <mesh>
+            <boxGeometry args={[0.5, 0.05, c.len + 0.3]} />
+            <meshStandardMaterial color="#b9dcef" roughness={0.6} />
+          </mesh>
+          <mesh position={[0, 0.02, 0]}>
+            <boxGeometry args={[0.28, 0.05, c.len]} />
+            <meshBasicMaterial color="#0b1c2c" />
+          </mesh>
+        </group>
       ))}
     </group>
   );
@@ -159,17 +192,17 @@ function DistantVolcanoes() {
     <group>
       <mesh rotation={[-Math.PI / 2, 0, 0]} position={[0, 0.2, 0]}>
         <circleGeometry args={[1400, 32]} />
-        <meshStandardMaterial color="#1f3326" />
+        <meshStandardMaterial color="#14241a" roughness={1} />
       </mesh>
       {peaks.map((k, i) => (
         <group key={i} position={k.p}>
           <mesh position={[0, k.h / 2, 0]}>
-            <coneGeometry args={[k.r, k.h, 9]} />
-            <meshStandardMaterial color="#3e4a44" flatShading />
+            <coneGeometry args={[k.r, k.h, 40]} />
+            <meshStandardMaterial color="#3a4440" roughness={1} />
           </mesh>
           <mesh position={[0, k.h * 0.8, 0]}>
-            <coneGeometry args={[k.r * 0.4, k.h * 0.4, 9]} />
-            <meshStandardMaterial color="#eef3f6" flatShading />
+            <coneGeometry args={[k.r * 0.4, k.h * 0.4, 40]} />
+            <meshStandardMaterial color="#e6edf2" roughness={0.9} />
           </mesh>
         </group>
       ))}
@@ -241,6 +274,69 @@ function Snowfall({ intensity, center }: { intensity: React.MutableRefObject<num
   );
 }
 
+// ---------- sky dome and sun ----------
+
+const SKY_SEG = { w: 32, h: 16 };
+
+/** A gradient sky: deep color overhead, hazy and pale toward the horizon. */
+function SkyDome({ zenith, horizon }: { zenith: THREE.Color; horizon: THREE.Color }) {
+  const geometry = useMemo(() => {
+    const g = new THREE.SphereGeometry(2400, SKY_SEG.w, SKY_SEG.h);
+    g.setAttribute('color', new THREE.BufferAttribute(new Float32Array(g.attributes.position.count * 3), 3));
+    return g;
+  }, []);
+  const mesh = useRef<THREE.Mesh>(null);
+  const { camera } = useThree();
+  const tmp = useMemo(() => new THREE.Color(), []);
+  useFrame(() => {
+    if (!mesh.current) return;
+    mesh.current.position.copy(camera.position);
+    const pos = geometry.attributes.position as THREE.BufferAttribute;
+    const col = geometry.attributes.color as THREE.BufferAttribute;
+    for (let i = 0; i < pos.count; i++) {
+      const y = pos.getY(i) / 2400;
+      const t = y <= 0 ? 0 : Math.pow(y, 0.45);
+      tmp.copy(horizon).lerp(zenith, t);
+      col.setXYZ(i, tmp.r, tmp.g, tmp.b);
+    }
+    col.needsUpdate = true;
+  });
+  return (
+    <mesh ref={mesh} geometry={geometry} renderOrder={-1}>
+      <meshBasicMaterial vertexColors side={THREE.BackSide} fog={false} depthWrite={false} />
+    </mesh>
+  );
+}
+
+function SunDisc({ dir, strength }: { dir: React.MutableRefObject<THREE.Vector3>; strength: React.MutableRefObject<number> }) {
+  const mesh = useRef<THREE.Mesh>(null);
+  const glow = useRef<THREE.Mesh>(null);
+  const { camera } = useThree();
+  useFrame(() => {
+    const s = strength.current;
+    for (const [ref, size] of [[mesh, 40], [glow, 160]] as const) {
+      if (!ref.current) continue;
+      ref.current.visible = s > 0.02;
+      ref.current.position.copy(camera.position).addScaledVector(dir.current, 2000);
+      ref.current.lookAt(camera.position);
+      ref.current.scale.setScalar(size);
+      (ref.current.material as THREE.MeshBasicMaterial).opacity = (ref === glow ? 0.18 : 1) * s;
+    }
+  });
+  return (
+    <>
+      <mesh ref={glow} renderOrder={-1}>
+        <circleGeometry args={[1, 32]} />
+        <meshBasicMaterial color="#fff1d6" transparent fog={false} depthWrite={false} />
+      </mesh>
+      <mesh ref={mesh} renderOrder={-1}>
+        <circleGeometry args={[1, 32]} />
+        <meshBasicMaterial color="#fffaf0" transparent fog={false} depthWrite={false} />
+      </mesh>
+    </>
+  );
+}
+
 // ---------- lighting and sky ----------
 
 const SKY_NIGHT = new THREE.Color('#0a1424');
@@ -262,9 +358,9 @@ function fogFor(weather: Weather): [number, number] {
   switch (weather) {
     case 'whiteout': return [2, 22];
     case 'storm': return [3, 35];
-    case 'windy': return [60, 420];
-    case 'coldsnap': return [80, 600];
-    default: return [120, 900];
+    case 'windy': return [50, 380];
+    case 'coldsnap': return [70, 500];
+    default: return [80, 600];
   }
 }
 
@@ -293,7 +389,13 @@ function World(props: SceneProps) {
   }, []);
   const ropeObj = useMemo(() => new THREE.Line(rope, new THREE.LineBasicMaterial({ color: '#2f9fd8' })), [rope]);
   const sky = useMemo(() => new THREE.Color(SKY_DAY), []);
+  const zenith = useMemo(() => new THREE.Color(SKY_DAY), []);
+  const horizon = useMemo(() => new THREE.Color(SKY_DAY), []);
   const fog = useMemo(() => new THREE.Fog(SKY_DAY, 120, 900), []);
+  const sunDir = useRef(new THREE.Vector3(0, 1, 0));
+  const sunStrength = useRef(0);
+  const routeHighlight = useRef(0);
+  const { size } = useThree();
 
   useEffect(() => {
     scene.background = sky;
@@ -375,8 +477,12 @@ function World(props: SceneProps) {
     if (p.weather === 'whiteout') want.lerp(SKY_WHITEOUT, 0.85 * Math.max(0.3, day));
     if (p.weather === 'storm') want.lerp(SKY_STORM, 0.8 * Math.max(0.3, day));
     sky.lerp(want, Math.min(1, dt * 1.5));
-    fog.color.copy(sky);
-    const [near, far] = p.mode === 'orbit' ? [300, 1500] : fogFor(p.weather);
+    // Deeper blue overhead, pale haze at the horizon; fog matches the haze so distance fades into it.
+    zenith.copy(sky).multiplyScalar(0.62).lerp(SKY_NIGHT, night.current * 0.5);
+    horizon.copy(sky).lerp(new THREE.Color('#ffffff'), 0.32 * day).lerp(SKY_NIGHT, night.current * 0.35);
+    fog.color.copy(horizon);
+    scene.background = horizon;
+    const [near, far] = p.mode === 'orbit' ? [70, 650] : fogFor(p.weather);
     fog.near += (near - fog.near) * Math.min(1, dt * 1.5);
     fog.far += (far - fog.far) * Math.min(1, dt * 1.5);
 
@@ -388,7 +494,17 @@ function World(props: SceneProps) {
       sun.current.target.updateMatrixWorld();
       sun.current.intensity += (0.2 + day * 2.4 - sun.current.intensity) * Math.min(1, dt * 2);
       sun.current.color.set(dawn > 0.1 ? '#ffc29a' : '#fff6e8');
+      sunDir.current.copy(sun.current.position).sub(here).normalize();
+      const clouded = p.weather === 'whiteout' || p.weather === 'storm' ? 0 : p.weather === 'windy' ? 0.7 : 1;
+      sunStrength.current = Math.min(1, day * 1.5) * clouded;
     }
+    routeHighlight.current += ((p.mode === 'follow' && p.control.current.overview ? 1 : 0) - routeHighlight.current) * Math.min(1, dt * 4);
+
+    // Shift the picture up when UI covers the bottom of the screen.
+    const shift = p.viewShift ?? 0;
+    const cam = camera as THREE.PerspectiveCamera;
+    if (shift > 0) cam.setViewOffset(size.width, size.height, 0, size.height * shift, size.width, size.height);
+    else if (cam.view) cam.clearViewOffset();
     if (hemi.current) {
       hemi.current.intensity += (0.35 + day * 0.9 - hemi.current.intensity) * Math.min(1, dt * 2);
     }
@@ -434,7 +550,9 @@ function World(props: SceneProps) {
       <directionalLight ref={sun} position={[-100, 150, 120]} intensity={2} />
       <spotLight ref={lamp} angle={0.45} penumbra={0.5} distance={18} decay={1} intensity={0} color="#fff3cf" />
       <Terrain />
-      <RouteLine />
+      <SkyDome zenith={zenith} horizon={horizon} />
+      <SunDisc dir={sunDir} strength={sunStrength} />
+      <RouteLine highlight={routeHighlight} />
       <RouteMarkers wands={props.wands} />
       <Crevasses />
       <DistantVolcanoes />
