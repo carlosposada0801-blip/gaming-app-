@@ -38,6 +38,8 @@ export interface SceneProps {
 const PERSON = 1.7;
 /** Rope length between partners on the glacier (m). */
 const ROPE_M = 10;
+/** How far below each stop you rejoin the party after the time-lapse cut (m). */
+const WALK_IN_M = 14;
 
 // ---------- terrain meshes ----------
 
@@ -139,7 +141,7 @@ function CloudSea({ amount }: { amount: React.MutableRefObject<number> }) {
     if (mesh.current) mesh.current.visible = amount.current > 0.02;
   });
   return (
-    <mesh ref={mesh} rotation={[-Math.PI / 2, 0, 0]} position={[0, 1250, 0]} material={mat}>
+    <mesh ref={mesh} rotation={[-Math.PI / 2, 0, 0]} position={[0, 1500, 0]} material={mat}>
       <planeGeometry args={[120000, 120000, 1, 1]} />
     </mesh>
   );
@@ -554,7 +556,8 @@ function World(props: SceneProps) {
   const lamp = useRef<THREE.SpotLight>(null);
   const lampTarget = useRef<THREE.Object3D>(new THREE.Object3D());
   const pos = useRef(ROUTE.nodeIndex[props.node]);
-  const speed = useRef(20);
+  const speed = useRef(0.15);
+  const snapCamera = useRef(true);
   const lastTarget = useRef(ROUTE.nodeIndex[props.node]);
   const heading = useRef(0);
   const camTarget = useRef(new THREE.Vector3(...nodePosition(props.node)));
@@ -611,10 +614,22 @@ function World(props: SceneProps) {
     const p = latest.current;
     const target = ROUTE.nodeIndex[p.node];
 
-    // --- move along the route: a whole leg takes about five seconds on screen ---
+    // --- move along the route ---
+    // A leg takes hours, so the screen cuts ahead (the climb screen fades) and you rejoin the
+    // party a short way below the next stop, walking in at a real uphill pace.
     if (target !== lastTarget.current) {
-      speed.current = Math.max(20, Math.abs(target - pos.current) / 5);
+      const dir = Math.sign(target - pos.current) || 1;
+      const walkIn = WALK_IN_M / ROUTE_SPACING;
+      if (Math.abs(target - pos.current) > walkIn * 1.5) {
+        pos.current = target - dir * walkIn;
+        snapCamera.current = true;
+      }
+      speed.current = (p.facing === 'down' ? 1.4 : 0.9) / ROUTE_SPACING;
       lastTarget.current = target;
+      if (follow) {
+        const [tx, , tz] = ROUTE.pts[target];
+        setPatch(buildPatch(tx, tz));
+      }
     }
     const diff = target - pos.current;
     const walking = Math.abs(diff) > 0.01;
@@ -637,11 +652,10 @@ function World(props: SceneProps) {
       climber.current.rotation.y = heading.current;
     }
 
-    // Keep the detail patch under the climber. Rebuild only once they stop: mid-leg they cover
-    // kilometers in seconds and walk on the core mesh.
+    // Keep the detail patch under the climber (normally built when a new stop is set).
     if (follow && !walking) {
       const cur = currentPatch();
-      if (!cur || Math.hypot(here.x - cur.cx, here.z - cur.cz) > PATCH_HALF * 0.42) setPatch(buildPatch(here.x, here.z));
+      if (!cur || Math.hypot(here.x - cur.cx, here.z - cur.cz) > PATCH_HALF * 0.6) setPatch(buildPatch(here.x, here.z));
     }
 
     // Partner trails a rope length behind.
@@ -745,8 +759,17 @@ function World(props: SceneProps) {
       look = here.clone().add(new THREE.Vector3(0, 1.5, 0)).addScaledVector(fwd, 25);
       look.y += 25 * (0.07 + rise * 0.5);
     }
-    camera.position.lerp(camPos, Math.min(1, dt * (follow ? 3 : 1)));
-    camTarget.current.lerp(look, Math.min(1, dt * 4));
+    if (snapCamera.current) {
+      camera.position.copy(camPos);
+      camTarget.current.copy(look);
+      snapCamera.current = false;
+    } else {
+      camera.position.lerp(camPos, Math.min(1, dt * (follow ? 4 : 1)));
+      camTarget.current.lerp(look, Math.min(1, dt * 5));
+    }
+    // Never let the camera slip under the snow.
+    const floor = surfaceAt(camera.position.x, camera.position.z) + 0.8;
+    if (camera.position.y < floor) camera.position.y = floor;
     camera.lookAt(camTarget.current);
 
     const shift = p.viewShift ?? 0;
@@ -799,7 +822,7 @@ export function MountainScene(props: SceneProps) {
     <Canvas
       shadows
       camera={{ position: [start[0], start[1] + 4, start[2] + 8], fov: 62, near: 0.5, far: 400000 }}
-      onCreated={({ gl }) => { gl.toneMappingExposure = 1.2; }}
+      onCreated={({ gl }) => { gl.toneMappingExposure = 1.05; }}
     >
       <World {...props} />
     </Canvas>

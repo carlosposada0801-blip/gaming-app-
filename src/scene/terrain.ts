@@ -254,7 +254,7 @@ const PUMICE: Vec3 = [0.3, 0.26, 0.2];
 const ROCK: Vec3 = [0.14, 0.13, 0.125];
 const ROCK_DARK: Vec3 = [0.05, 0.047, 0.047];
 const ROCK_RED: Vec3 = [0.19, 0.1, 0.07];
-const SNOW: Vec3 = [0.86, 0.89, 0.93];
+const SNOW: Vec3 = [0.8, 0.83, 0.88];
 const FIRN: Vec3 = [0.74, 0.76, 0.78];
 const ICE: Vec3 = [0.48, 0.62, 0.76];
 

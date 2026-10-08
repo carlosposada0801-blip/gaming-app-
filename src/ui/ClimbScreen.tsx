@@ -1,9 +1,9 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
-import { PanResponder, Pressable, ScrollView, StyleSheet, Text, View, useWindowDimensions } from 'react-native';
+import { Animated, PanResponder, Pressable, ScrollView, StyleSheet, Text, View, useWindowDimensions } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import * as Haptics from 'expo-haptics';
 import {
-  LAYER_LABEL, WEATHER_LABEL, chooseEvent, doAction, eventChoices, listActions, moveBlockedReason, roped,
+  LAYER_LABEL, WEATHER_LABEL, chooseEvent, doAction, eventChoices, fmtDuration, listActions, moveBlockedReason, roped,
   warmthTrend, type Action,
 } from '../game/engine';
 import { ENDINGS } from '../game/endings';
@@ -66,6 +66,20 @@ export function ClimbScreen({
     if (state.pendingEvent) fire(Haptics.notificationAsync(Haptics.NotificationFeedbackType.Warning));
   }, [state.pendingEvent]);
 
+  // Time-lapse card between stops: the leg takes hours, the screen takes a breath.
+  const fade = useRef(new Animated.Value(0)).current;
+  const lastMove = useRef({ id: state.moveId, clock: state.clock });
+  const [cut, setCut] = useState<{ place: string; ft: string; took: string } | null>(null);
+  useEffect(() => {
+    if (state.moveId === lastMove.current.id) return;
+    const took = fmtDuration(state.clock - lastMove.current.clock);
+    lastMove.current = { id: state.moveId, clock: state.clock };
+    const n = NODES[state.node];
+    setCut({ place: n.name, ft: formatFt(n.ft), took });
+    fade.setValue(1);
+    Animated.timing(fade, { toValue: 0, duration: 1600, delay: 900, useNativeDriver: true }).start(() => setCut(null));
+  }, [state.moveId, state.clock, state.node, fade]);
+
   function commit(next: GameState) {
     if (next === state) return;
     const newest = next.log[0];
@@ -118,6 +132,14 @@ export function ClimbScreen({
         />
       </View>
       <View style={StyleSheet.absoluteFill} {...pan.panHandlers} />
+
+      {cut && (
+        <Animated.View style={[styles.cut, { opacity: fade }]} pointerEvents="none">
+          <Text style={styles.cutTook}>{cut.took} later</Text>
+          <Text style={styles.cutPlace}>{cut.place}</Text>
+          <Text style={[styles.cutFt, NUM]}>{cut.ft}</Text>
+        </Animated.View>
+      )}
 
       {/* ---------- top HUD ---------- */}
       <View style={[styles.top, { paddingTop: insets.top + 8 }]} pointerEvents="box-none">
@@ -311,6 +333,10 @@ function quickDetail(id: string, s: GameState) {
 
 const styles = StyleSheet.create({
   root: { flex: 1, backgroundColor: C.bg },
+  cut: { position: 'absolute', top: 0, right: 0, bottom: 0, left: 0, backgroundColor: '#05090e', alignItems: 'center', justifyContent: 'center', gap: 4 },
+  cutTook: { color: C.muted, fontSize: 13, fontWeight: '700', letterSpacing: 1.2, textTransform: 'uppercase' },
+  cutPlace: { color: C.text, fontSize: 30, fontWeight: '800' },
+  cutFt: { color: C.ice, fontSize: 16, fontWeight: '700' },
 
   top: { position: 'absolute', left: 0, right: 0, top: 0, paddingHorizontal: 12, gap: 8 },
   topRow: { flexDirection: 'row', justifyContent: 'space-between', gap: 8 },
