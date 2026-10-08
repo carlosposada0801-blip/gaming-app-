@@ -28,3 +28,8 @@ npx eas-cli@latest submit --platform ios
 The bundle ID is `com.carlosposada.summitrainier` (set in `app.json`); change it if it's taken.
 
 See `CLAUDE.md` for how the game is put together.
+
+## Credits
+
+Terrain is the real Mount Rainier: elevation data from AWS Terrain Tiles (Terrarium), derived from
+USGS 3DEP and SRTM. See `tools/dem/` to regenerate it.

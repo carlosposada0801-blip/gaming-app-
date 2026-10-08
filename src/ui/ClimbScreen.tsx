@@ -42,11 +42,11 @@ export function ClimbScreen({
   const insets = useSafeAreaInsets();
   const { height } = useWindowDimensions();
 
-  const control = useRef<CameraControl>({ yaw: 0, dist: 6, overview: false });
+  const control = useRef<CameraControl>({ yaw: 0, dist: 8, overview: false });
   const [overview, setOverview] = useState(false);
   const [sheet, setSheet] = useState<'none' | 'options' | 'notes'>('none');
 
-  const drag = useRef({ yaw: 0, dist: 6 });
+  const drag = useRef({ yaw: 0, dist: 8 });
   const pan = useMemo(
     () => PanResponder.create({
       onStartShouldSetPanResponder: () => true,
@@ -56,7 +56,7 @@ export function ClimbScreen({
       },
       onPanResponderMove: (_, g) => {
         control.current.yaw = drag.current.yaw - g.dx * 0.008;
-        control.current.dist = Math.max(2.5, Math.min(14, drag.current.dist + g.dy * 0.03));
+        control.current.dist = Math.max(3, Math.min(40, drag.current.dist + g.dy * 0.06));
       },
     }),
     [],
@@ -114,7 +114,7 @@ export function ClimbScreen({
           wands={!!state.flags.wandsPlaced}
           mode="follow"
           control={control}
-          viewShift={0.16}
+          facing={state.dir}
         />
       </View>
       <View style={StyleSheet.absoluteFill} {...pan.panHandlers} />

@@ -1,12 +1,17 @@
-// Procedural Mount Rainier: a broad volcanic cone with radial ridges and noise,
-// plus the Disappointment Cleaver route projected onto its surface.
+// Mount Rainier from real elevation data (see tools/dem). World units are meters:
+// x = east, z = south, y = elevation above sea level.
+//
+// Three height layers:
+//   FAR   45 km square around the mountain, 352 m cells (horizon ridges).
+//   CORE  22 km square, 28.6 m data rendered as a 57 m mesh (the mountain).
+//   PATCH a 1.6 km square around the climber at 6.5 m with added relief (rocks, rolls in the
+//         snow), rebuilt as the climber moves. It sits on the core mesh exactly at its edges.
 import { NODES } from '../game/route';
+import { CORE_B64, CORE_HALF, CORE_N, FAR_B64, FAR_HALF, FAR_N, WAYPOINTS } from './data/rainierDem';
 
-export const MOUNTAIN_H = 60;
-export const TERRAIN_SIZE = 280;
-export const TERRAIN_SEGMENTS = 300;
-const FT_BASE = 4000;
-const FT_TOP = 14411;
+export type Vec3 = [number, number, number];
+
+// ---------- noise ----------
 
 function hash(x: number, y: number) {
   const s = Math.sin(x * 127.1 + y * 311.7) * 43758.5453;
@@ -39,114 +44,283 @@ export function fbm(x: number, y: number, octaves = 4) {
   return f;
 }
 
-export function heightAt(x: number, z: number) {
-  const r = Math.hypot(x, z);
-  const th = Math.atan2(z, x);
-  const base = MOUNTAIN_H / (1 + Math.pow(r / 26, 2.3));
-  const ridges = Math.pow(Math.abs(Math.sin(th * 5 + r * 0.04)), 3) * Math.min(1, r / 15) * Math.exp(-r / 60) * 5;
-  const n = (fbm(x * 0.05 + 10, z * 0.05 + 10) - 0.5) * 6 * Math.min(1, r / 12);
-  const dome = r < 6 ? (fbm(x * 0.3, z * 0.3) - 0.5) * 0.6 : 0;
-  // Eroded gullies and rock ribs running down the flanks.
-  const flank = Math.min(1, r / 10) * Math.exp(-r / 85);
-  const ridged = 1 - Math.abs(fbm(x * 0.11 - 4, z * 0.11 + 9, 5) * 2 - 1);
-  const gullies = (ridged * ridged - 0.35) * 2.4 * flank;
-  // Fine surface texture: seracs, moraine and rock steps.
-  const detail = (fbm(x * 0.35 + 3, z * 0.35 - 6, 3) - 0.5) * 0.9 * Math.min(1, r / 8);
-  return base + ridges + n + dome + gullies + detail;
-}
-
-const smooth = (a: number, b: number, v: number) => {
+export const smooth = (a: number, b: number, v: number) => {
   const t = Math.max(0, Math.min(1, (v - a) / (b - a)));
   return t * t * (3 - 2 * t);
 };
 const mix3 = (a: Vec3, b: Vec3, t: number): Vec3 => [a[0] + (b[0] - a[0]) * t, a[1] + (b[1] - a[1]) * t, a[2] + (b[2] - a[2]) * t];
 
-export function ftToY(ft: number) {
-  return (MOUNTAIN_H * (ft - FT_BASE)) / (FT_TOP - FT_BASE);
-}
+// ---------- height grids ----------
 
-/** Bearing of each route node around the mountain (radians; +z faces the camera, i.e. south). */
-const NODE_ANGLES = [100, 96, 84, 58, 50, 62, 75, 90].map((d) => (d * Math.PI) / 180);
+const B64 = 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/';
 
-function radiusFor(theta: number, y: number) {
-  let lo = 0;
-  let hi = TERRAIN_SIZE / 2 - 4;
-  const h = (r: number) => heightAt(r * Math.cos(theta), r * Math.sin(theta));
-  if (y >= h(0)) return 0;
-  for (let i = 0; i < 40; i++) {
-    const mid = (lo + hi) / 2;
-    if (h(mid) > y) lo = mid;
-    else hi = mid;
+function decodeHeights(b64: string, n: number): Float32Array {
+  const lookup = new Uint8Array(128);
+  for (let i = 0; i < B64.length; i++) lookup[B64.charCodeAt(i)] = i;
+  const total = n * n * 2;
+  const bytes = new Uint8Array(total);
+  let p = 0;
+  for (let i = 0; i < b64.length && p < total; i += 4) {
+    const v = (lookup[b64.charCodeAt(i)] << 18) | (lookup[b64.charCodeAt(i + 1)] << 12)
+      | (lookup[b64.charCodeAt(i + 2)] << 6) | lookup[b64.charCodeAt(i + 3)];
+    bytes[p++] = (v >> 16) & 255;
+    if (p < total) bytes[p++] = (v >> 8) & 255;
+    if (p < total) bytes[p++] = v & 255;
   }
-  return (lo + hi) / 2;
+  const out = new Float32Array(n * n);
+  for (let i = 0; i < n * n; i++) out[i] = (bytes[2 * i] | (bytes[2 * i + 1] << 8)) / 10;
+  return out;
 }
 
-export type Vec3 = [number, number, number];
+/** A square height grid centered on (cx, cz). Row index runs north to south (z), column west to east (x). */
+export interface Grid {
+  cx: number;
+  cz: number;
+  half: number;
+  n: number;
+  step: number;
+  h: Float32Array;
+}
 
-function buildPath() {
+const grid = (h: Float32Array, n: number, half: number, cx = 0, cz = 0): Grid => ({ cx, cz, half, n, step: (2 * half) / (n - 1), h });
+
+const CORE_DATA = grid(decodeHeights(CORE_B64, CORE_N), CORE_N, CORE_HALF);
+export const FAR = grid(decodeHeights(FAR_B64, FAR_N), FAR_N, FAR_HALF);
+
+/** The core terrain mesh: every second data sample (57 m). */
+export const CORE_MESH: Grid = (() => {
+  const n = (CORE_N - 1) / 2 + 1;
+  const h = new Float32Array(n * n);
+  for (let r = 0; r < n; r++) for (let c = 0; c < n; c++) h[r * n + c] = CORE_DATA.h[2 * r * CORE_N + 2 * c];
+  return grid(h, n, CORE_HALF);
+})();
+
+export function inside(g: Grid, x: number, z: number, margin = 0) {
+  return Math.abs(x - g.cx) <= g.half - margin && Math.abs(z - g.cz) <= g.half - margin;
+}
+
+/** Smooth bilinear sample (for slopes and placement). */
+export function bilinear(g: Grid, x: number, z: number) {
+  const gx = Math.max(0, Math.min(g.n - 1.0001, (x - g.cx + g.half) / g.step));
+  const gz = Math.max(0, Math.min(g.n - 1.0001, (z - g.cz + g.half) / g.step));
+  const c = Math.floor(gx);
+  const r = Math.floor(gz);
+  const fx = gx - c;
+  const fz = gz - r;
+  const i = r * g.n + c;
+  const h = g.h;
+  return (h[i] * (1 - fx) + h[i + 1] * fx) * (1 - fz) + (h[i + g.n] * (1 - fx) + h[i + g.n + 1] * fx) * fz;
+}
+
+/**
+ * Exact height of the rendered mesh for a grid built with THREE.PlaneGeometry rotated -90° about X.
+ * Each cell is split into triangles (a, b, d) and (b, c, d), so this matches the GPU's surface.
+ */
+export function meshHeight(g: Grid, x: number, z: number) {
+  const gx = Math.max(0, Math.min(g.n - 1.0001, (x - g.cx + g.half) / g.step));
+  const gz = Math.max(0, Math.min(g.n - 1.0001, (z - g.cz + g.half) / g.step));
+  const c = Math.floor(gx);
+  const r = Math.floor(gz);
+  const fx = gx - c;
+  const fz = gz - r;
+  const i = r * g.n + c;
+  const ha = g.h[i];
+  const hd = g.h[i + 1];
+  const hb = g.h[i + g.n];
+  const hc = g.h[i + g.n + 1];
+  if (fx + fz <= 1) return ha * (1 - fx - fz) + hb * fz + hd * fx;
+  return hb * (1 - fx) + hd * (1 - fz) + hc * (fx + fz - 1);
+}
+
+/** Slope in degrees and how much the ground faces north (1 = due north, -1 = south). */
+export function slopeAt(x: number, z: number) {
+  const d = 30;
+  const dx = (bilinear(CORE_DATA, x + d, z) - bilinear(CORE_DATA, x - d, z)) / (2 * d);
+  const dz = (bilinear(CORE_DATA, x, z + d) - bilinear(CORE_DATA, x, z - d)) / (2 * d);
+  const g = Math.hypot(dx, dz);
+  // Downhill direction is -gradient; facing north means downhill toward -z.
+  const north = g > 1e-4 ? dz / g : 0;
+  return { deg: (Math.atan(g) * 180) / Math.PI, north, dx, dz };
+}
+
+// ---------- the route ----------
+
+const NODE_WAYPOINT = ['Paradise', 'Pebble Creek', 'Camp Muir', 'Ingraham Flats', 'Top of the Cleaver', 'High Break', 'Crater Rim', 'Columbia Crest'];
+export const ROUTE_SPACING = 6;
+/** Sideways switchback amplitude (m) for the stretch starting at each waypoint. */
+const SWITCHBACK: Record<string, number> = {
+  'Top of the Cleaver': 18,
+  'High Break': 28,
+  'Disappointment Cleaver base': 8,
+};
+
+function buildRoute() {
   const pts: Vec3[] = [];
-  const nodeIndex: number[] = [];
-  const STEPS = 18;
-  for (let i = 0; i < NODES.length - 1; i++) {
-    nodeIndex.push(pts.length);
-    for (let k = 0; k < STEPS; k++) {
-      const t = k / STEPS;
-      const ft = NODES[i].ft + (NODES[i + 1].ft - NODES[i].ft) * t;
-      // Switchback wiggle so the trail doesn't look ruled.
-      const wiggle = Math.sin(t * Math.PI * 4) * 0.035 * (i >= 2 ? 1 : 0.5);
-      const th = NODE_ANGLES[i] + (NODE_ANGLES[i + 1] - NODE_ANGLES[i]) * t + wiggle;
-      const r = radiusFor(th, ftToY(ft));
-      const x = r * Math.cos(th);
-      const z = r * Math.sin(th);
-      pts.push([x, heightAt(x, z), z]);
+  const nodeIndex: number[] = new Array(NODES.length).fill(0);
+  WAYPOINTS.forEach((w, wi) => {
+    const ni = NODE_WAYPOINT.indexOf(w.name);
+    if (ni >= 0) nodeIndex[ni] = pts.length;
+    const next = WAYPOINTS[wi + 1];
+    if (!next) {
+      pts.push([w.x, meshHeight(CORE_MESH, w.x, w.z), w.z]);
+      return;
     }
-  }
-  nodeIndex.push(pts.length);
-  const top = [0.4, heightAt(0.4, 0.4), 0.4] as Vec3;
-  pts.push(top);
+    const len = Math.hypot(next.x - w.x, next.z - w.z);
+    const steps = Math.max(1, Math.round(len / ROUTE_SPACING));
+    const px = -(next.z - w.z) / len;
+    const pz = (next.x - w.x) / len;
+    const amp = SWITCHBACK[w.name] ?? 0;
+    for (let k = 0; k < steps; k++) {
+      const t = k / steps;
+      const side = amp * Math.sin(t * Math.PI * Math.max(1, Math.round(len / 160))) * Math.sin(t * Math.PI);
+      const x = w.x + (next.x - w.x) * t + px * side;
+      const z = w.z + (next.z - w.z) * t + pz * side;
+      pts.push([x, meshHeight(CORE_MESH, x, z), z]);
+    }
+  });
   return { pts, nodeIndex };
 }
 
-export const ROUTE = buildPath();
+export const ROUTE = buildRoute();
+export const SUMMIT_POS: Vec3 = ROUTE.pts[ROUTE.pts.length - 1];
 
 export function nodePosition(i: number): Vec3 {
   return ROUTE.pts[ROUTE.nodeIndex[i]];
 }
 
-// Linear-space colors, picked from photos of the mountain in July.
+// Spatial hash of route points for "how far from the track" queries.
+const CELL = 24;
+const routeCells = new Map<number, number[]>();
+const cellKey = (cx: number, cz: number) => cx * 100003 + cz;
+ROUTE.pts.forEach(([x, , z], i) => {
+  const k = cellKey(Math.floor(x / CELL), Math.floor(z / CELL));
+  const list = routeCells.get(k);
+  if (list) list.push(i);
+  else routeCells.set(k, [i]);
+});
+
+/** Distance (m) to the nearest route point, capped at 2 * CELL. */
+export function distToRoute(x: number, z: number) {
+  const cx = Math.floor(x / CELL);
+  const cz = Math.floor(z / CELL);
+  let best = CELL * 2;
+  for (let i = -1; i <= 1; i++) {
+    for (let j = -1; j <= 1; j++) {
+      const list = routeCells.get(cellKey(cx + i, cz + j));
+      if (!list) continue;
+      for (const k of list) {
+        const p = ROUTE.pts[k];
+        const d = Math.hypot(p[0] - x, p[2] - z);
+        if (d < best) best = d;
+      }
+    }
+  }
+  return best;
+}
+
+// ---------- ground cover ----------
+
+/** How much snow or glacier covers the ground here, 0..1 (July conditions). */
+export function snowCover(x: number, y: number, z: number, slopeDeg: number, north: number) {
+  const n = fbm(x * 0.0035 + 3, z * 0.0035 - 8);
+  const snowline = 1950 - 260 * north + (n - 0.5) * 320;
+  const patchy = smooth(0.42, 0.58, fbm(x * 0.02, z * 0.02, 3)) * 0.35;
+  const altitude = smooth(snowline - 90, snowline + 90, y);
+  const steep = smooth(37, 50, slopeDeg + (n - 0.5) * 10);
+  return Math.max(0, Math.min(1, altitude * (1 - steep) - patchy * (1 - smooth(2200, 2500, y))));
+}
+
+/** Glacier ice rather than snowfield, 0..1. */
+export function glacierness(x: number, y: number, z: number) {
+  return smooth(0.42, 0.58, fbm(x * 0.0011 - 20, z * 0.0011 + 7, 3)) * smooth(2000, 2600, y) * (1 - smooth(3700, 4100, y));
+}
+
+// Linear-space colors.
 const FOREST: Vec3 = [0.035, 0.07, 0.04];
-const MEADOW: Vec3 = [0.16, 0.2, 0.08];
-const ROCK: Vec3 = [0.16, 0.14, 0.13];
-const ROCK_DARK: Vec3 = [0.07, 0.065, 0.065];
-const ROCK_RED: Vec3 = [0.2, 0.12, 0.09]; // oxidized andesite, like the Cleaver
+const MEADOW: Vec3 = [0.19, 0.24, 0.085];
+const PUMICE: Vec3 = [0.3, 0.26, 0.2];
+const ROCK: Vec3 = [0.14, 0.13, 0.125];
+const ROCK_DARK: Vec3 = [0.05, 0.047, 0.047];
+const ROCK_RED: Vec3 = [0.19, 0.1, 0.07];
 const SNOW: Vec3 = [0.86, 0.89, 0.93];
-const GLACIER: Vec3 = [0.6, 0.74, 0.86];
+const FIRN: Vec3 = [0.74, 0.76, 0.78];
+const ICE: Vec3 = [0.48, 0.62, 0.76];
 
-/** Vertex color for a terrain point. Returns [r, g, b] in 0..1 (linear). */
-export function terrainColor(x: number, y: number, z: number, slope: number): Vec3 {
-  const n = fbm(x * 0.12, z * 0.12);
-  const fine = fbm(x * 0.6 + 3, z * 0.6 - 2, 3);
-  const treeline = ftToY(5900) + (n - 0.5) * 4;
-  const snowline = ftToY(6800) + (n - 0.5) * 7;
+export function groundColor(x: number, y: number, z: number, slopeDeg: number, north: number): Vec3 {
+  const n = fbm(x * 0.004, z * 0.004);
+  const f = fbm(x * 0.05 + 3, z * 0.05 - 2, 3);
 
-  // Bare ground: forest and meadow low down, rock above.
-  let rock = mix3(ROCK, ROCK_DARK, smooth(0.35, 0.75, fine));
-  rock = mix3(rock, ROCK_RED, smooth(0.6, 0.8, fbm(x * 0.05 + 40, z * 0.05 - 13)) * 0.7);
-  const green = mix3(FOREST, MEADOW, smooth(0.45, 0.7, n));
-  let c = mix3(rock, green, 1 - smooth(treeline - 1.5, treeline + 1.5, y));
+  // Bare ground: forest and meadow low, pumice and talus higher, rock on the steep.
+  const treeline = 1720 + (n - 0.5) * 220;
+  let bare = mix3(PUMICE, ROCK, smooth(1900, 2700, y));
+  bare = mix3(bare, ROCK_DARK, smooth(0.45, 0.8, f) * 0.6);
+  bare = mix3(bare, ROCK_RED, smooth(0.58, 0.75, fbm(x * 0.002 + 40, z * 0.002 - 13)) * 0.75);
+  bare = mix3(bare, ROCK_DARK, smooth(35, 55, slopeDeg) * 0.55);
+  // Paradise sits in subalpine meadow; dense forest only lower down.
+  const green = mix3(FOREST, MEADOW, smooth(1350, 1600, y) * (0.55 + 0.45 * smooth(0.3, 0.6, n)));
+  let c = mix3(bare, green, (1 - smooth(treeline - 60, treeline + 60, y)) * (1 - smooth(32, 42, slopeDeg)));
 
-  // Snow and glacier cover everything above the snowline except the steepest ground for that
-  // height (rock ribs like the Cleaver) and a few wind-scoured buttresses. The cone steepens
-  // with height, so "steep" is measured against the typical slope at this elevation.
-  const typical = Math.min(1.85, 0.12 + 0.04 * Math.max(0, y));
-  const steep = smooth(typical * 1.2, typical * 1.5, slope);
-  const scoured = smooth(0.7, 0.76, fbm(x * 0.07 + 40, z * 0.07)) * (1 - smooth(ftToY(12500), ftToY(13500), y)) * 0.6;
-  const cover = smooth(snowline - 2, snowline + 2, y) * (1 - steep) * (1 - scoured);
-  const ice = smooth(0.5, 0.65, fbm(x * 0.04 - 20, z * 0.04 + 7)) * smooth(ftToY(7500), ftToY(9000), y);
-  const snow = mix3(SNOW, GLACIER, ice * 0.6);
+  // Snow, with older grey firn in sun cups and blue ice where glaciers steepen.
+  const cover = snowCover(x, y, z, slopeDeg, north);
+  let snow = mix3(SNOW, FIRN, smooth(0.5, 0.75, f) * 0.35 * (1 - smooth(3000, 3600, y)));
+  snow = mix3(snow, ICE, glacierness(x, y, z) * smooth(14, 32, slopeDeg) * 0.55);
   c = mix3(c, snow, cover);
 
-  // Soft cavity shading so gullies read without real-time shadows.
-  const shade = 0.82 + 0.18 * fine;
+  const shade = 0.86 + 0.14 * f;
   return [c[0] * shade, c[1] * shade, c[2] * shade];
 }
+
+// ---------- detail patch around the climber ----------
+
+export const PATCH_HALF = 800;
+export const PATCH_N = 247;
+
+/** Extra relief added on top of the real terrain inside the patch (meters). */
+function relief(x: number, z: number, rockiness: number) {
+  const big = (fbm(x * 0.008 + 11, z * 0.008 - 7, 4) - 0.5) * 7;
+  const mid = (fbm(x * 0.035 - 3, z * 0.035 + 5, 3) - 0.5) * 2.4;
+  const r = 1 - Math.abs(fbm(x * 0.02 + 21, z * 0.02 + 2, 4) * 2 - 1);
+  const crags = r * r * r * 7 * rockiness;
+  const fine = (fbm(x * 0.16, z * 0.16, 2) - 0.5) * (0.35 + 1.4 * rockiness);
+  return big * (0.35 + 0.65 * rockiness) + mid * (0.5 + 0.5 * rockiness) + crags + fine;
+}
+
+let patch: Grid | null = null;
+
+/** Builds the high-detail patch centered near (x, z). Returns the grid; also used by surfaceAt. */
+export function buildPatch(x: number, z: number): Grid {
+  const cx = Math.round(x / 50) * 50;
+  const cz = Math.round(z / 50) * 50;
+  const n = PATCH_N;
+  const step = (2 * PATCH_HALF) / (n - 1);
+  const h = new Float32Array(n * n);
+  for (let r = 0; r < n; r++) {
+    const pz = cz - PATCH_HALF + r * step;
+    for (let c = 0; c < n; c++) {
+      const px = cx - PATCH_HALF + c * step;
+      const base = meshHeight(CORE_MESH, px, pz);
+      const edge = Math.min(c, r, n - 1 - c, n - 1 - r) * step;
+      const fade = smooth(0, 120, edge);
+      const track = smooth(3, 16, distToRoute(px, pz));
+      const s = slopeAt(px, pz);
+      const rock = 1 - snowCover(px, base, pz, s.deg, s.north);
+      h[r * n + c] = base + relief(px, pz, rock) * fade * track;
+    }
+  }
+  patch = { cx, cz, half: PATCH_HALF, n, step, h };
+  return patch;
+}
+
+export function currentPatch() {
+  return patch;
+}
+
+/** Height of the visible ground at (x, z). */
+export function surfaceAt(x: number, z: number) {
+  if (patch && inside(patch, x, z, patch.step)) return meshHeight(patch, x, z);
+  if (inside(CORE_MESH, x, z)) return meshHeight(CORE_MESH, x, z);
+  return bilinear(FAR, x, z);
+}
+
+/** Kept for older callers: height of the ground. */
+export const heightAt = surfaceAt;
