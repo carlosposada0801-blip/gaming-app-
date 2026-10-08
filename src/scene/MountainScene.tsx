@@ -256,7 +256,7 @@ function RouteTrack({ highlight }: { highlight: React.MutableRefObject<number> }
           color={TRACK}
           roughness={1}
           transparent
-          opacity={0.38}
+          opacity={0.26}
           depthWrite={false}
           side={THREE.DoubleSide}
           polygonOffset
@@ -722,7 +722,7 @@ function World(props: SceneProps) {
     }
     if (lamp.current) {
       const on = p.look.headlamp && day < 0.35 && follow;
-      lamp.current.intensity += ((on ? 900 : 0) - lamp.current.intensity) * Math.min(1, dt * 4);
+      lamp.current.intensity += ((on ? 450 : 0) - lamp.current.intensity) * Math.min(1, dt * 4);
       const fwd = new THREE.Vector3(Math.sin(heading.current), -0.35, Math.cos(heading.current));
       lamp.current.position.set(here.x, here.y + 1.75, here.z);
       lampTarget.current.position.copy(here).add(fwd.multiplyScalar(10));
@@ -795,7 +795,7 @@ function World(props: SceneProps) {
         shadow-camera-far={900}
         shadow-bias={-0.0005}
       />
-      <spotLight ref={lamp} angle={0.5} penumbra={0.6} distance={45} decay={2} intensity={0} color="#fff3cf" />
+      <spotLight ref={lamp} angle={0.62} penumbra={0.95} distance={45} decay={2} intensity={0} color="#fff3cf" />
       <SkyDome zenith={zenith} horizon={horizon} />
       <SunDisc dir={sunDir} strength={sunStrength} />
       <Stars night={night} />
