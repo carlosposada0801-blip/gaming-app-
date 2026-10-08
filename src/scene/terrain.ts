@@ -7,7 +7,9 @@
 //   PATCH a 1.6 km square around the climber at 6.5 m with added relief (rocks, rolls in the
 //         snow), rebuilt as the climber moves. It sits on the core mesh exactly at its edges.
 import { NODES } from '../game/route';
-import { CORE_B64, CORE_HALF, CORE_N, FAR_B64, FAR_HALF, FAR_N, WAYPOINTS } from './data/rainierDem';
+import {
+  CORE_B64, CORE_HALF, CORE_N, FAR_B64, FAR_HALF, FAR_N, HORIZON_B64, HORIZON_HALF, HORIZON_N, WAYPOINTS,
+} from './data/rainierDem';
 
 export type Vec3 = [number, number, number];
 
@@ -86,6 +88,16 @@ const grid = (h: Float32Array, n: number, half: number, cx = 0, cz = 0): Grid =>
 
 const CORE_DATA = grid(decodeHeights(CORE_B64, CORE_N), CORE_N, CORE_HALF);
 export const FAR = grid(decodeHeights(FAR_B64, FAR_N), FAR_N, FAR_HALF);
+/** 350 km of the Cascades: Adams, St. Helens, Hood and Glacier Peak on the horizon. */
+export const HORIZON = grid(decodeHeights(HORIZON_B64, HORIZON_N), HORIZON_N, HORIZON_HALF);
+
+const EARTH_R = 6371000;
+/** How far the Earth's surface has dropped below the horizontal at this distance from the mountain. */
+export function earthDrop(x: number, z: number) {
+  const dx = x - 1000;
+  const dz = z + 1000;
+  return (dx * dx + dz * dz) / (2 * EARTH_R);
+}
 
 /** The core terrain mesh: every second data sample (57 m). */
 export const CORE_MESH: Grid = (() => {
@@ -319,7 +331,8 @@ export function currentPatch() {
 export function surfaceAt(x: number, z: number) {
   if (patch && inside(patch, x, z, patch.step)) return meshHeight(patch, x, z);
   if (inside(CORE_MESH, x, z)) return meshHeight(CORE_MESH, x, z);
-  return bilinear(FAR, x, z);
+  if (inside(FAR, x, z)) return bilinear(FAR, x, z) - earthDrop(x, z);
+  return bilinear(HORIZON, x, z) - earthDrop(x, z);
 }
 
 /** Kept for older callers: height of the ground. */

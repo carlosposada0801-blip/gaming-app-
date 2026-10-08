@@ -2,12 +2,12 @@ import { useEffect, useMemo, useRef, useState } from 'react';
 import { Canvas, useFrame, useThree } from '@react-three/fiber/native';
 import * as THREE from 'three';
 import { Climber, type ClimberLook, type Motion } from './Climber';
-import { crevasseGeometry, rockGeometry, scatter, seracGeometry, type Instances } from './features';
+import { crevasseGeometry, rockGeometry, scatter, seracGeometry, treeGeometry, type Instances } from './features';
 import {
-  CORE_MESH, FAR, PATCH_HALF, ROUTE, ROUTE_SPACING, SUMMIT_POS, buildPatch, currentPatch, groundColor, inside, nodePosition,
-  surfaceAt, type Grid, type Vec3,
+  CORE_MESH, FAR, HORIZON, PATCH_HALF, ROUTE, ROUTE_SPACING, SUMMIT_POS, buildPatch, currentPatch, earthDrop, groundColor,
+  inside, nodePosition, surfaceAt, type Grid, type Vec3,
 } from './terrain';
-import { detailTextures } from './textures';
+import { cloudTexture, detailTextures } from './textures';
 import { minuteOfDay } from '../game/route';
 import type { Weather } from '../game/types';
 
@@ -34,7 +34,7 @@ export interface SceneProps {
   facing?: 'up' | 'down';
 }
 
-/** The climber model is about 1.05 units tall; scale it to a 1.8 m person. */
+/** Wand models are built about 1 unit tall; real wands stand about 1.7 m. */
 const PERSON = 1.7;
 /** Rope length between partners on the glacier (m). */
 const ROPE_M = 10;
@@ -86,13 +86,13 @@ function terrainGeometry(g: Grid, opts: { lower?: (x: number, z: number) => numb
 // The mountain and its surroundings never change, so build them once and share between screens.
 let coreGeo: THREE.BufferGeometry | null = null;
 let farGeo: THREE.BufferGeometry | null = null;
+let horizonGeo: THREE.BufferGeometry | null = null;
 function staticTerrain() {
   if (!coreGeo) coreGeo = terrainGeometry(CORE_MESH);
-  if (!farGeo) {
-    // Tuck the far ring under the core so they never fight for the same pixels.
-    farGeo = terrainGeometry(FAR, { lower: (x, z) => (inside(CORE_MESH, x, z, -400) ? 150 : 0) });
-  }
-  return { coreGeo, farGeo };
+  // Each outer ring tucks under the one inside it, and follows the curve of the Earth.
+  if (!farGeo) farGeo = terrainGeometry(FAR, { lower: (x, z) => earthDrop(x, z) + (inside(CORE_MESH, x, z, -400) ? 150 : 0) });
+  if (!horizonGeo) horizonGeo = terrainGeometry(HORIZON, { lower: (x, z) => earthDrop(x, z) + (inside(FAR, x, z, -2000) ? 400 : 0) });
+  return { coreGeo, farGeo, horizonGeo };
 }
 
 function useGroundMaterial(offset: number) {
@@ -113,19 +113,35 @@ function useGroundMaterial(offset: number) {
 }
 
 function StaticTerrain() {
-  const { coreGeo: core, farGeo: far } = useMemo(staticTerrain, []);
+  const { coreGeo: core, farGeo: far, horizonGeo: horizon } = useMemo(staticTerrain, []);
   const coreMat = useGroundMaterial(3);
   const farMat = useGroundMaterial(6);
+  const horizonMat = useGroundMaterial(10);
   return (
     <>
+      <mesh geometry={horizon} material={horizonMat} />
       <mesh geometry={far} material={farMat} />
       <mesh geometry={core} material={coreMat} receiveShadow />
-      {/* Lowlands beyond the data, lost in haze */}
-      <mesh rotation={[-Math.PI / 2, 0, 0]} position={[0, 350, 0]}>
-        <circleGeometry args={[150000, 48]} />
-        <meshStandardMaterial color="#1a2a20" roughness={1} />
-      </mesh>
     </>
+  );
+}
+
+/** A sea of cloud filling the lowlands on clear mornings, with the Cascade volcanoes poking through. */
+function CloudSea({ amount }: { amount: React.MutableRefObject<number> }) {
+  const mat = useMemo(() => {
+    const t = cloudTexture();
+    t.repeat.set(5, 5);
+    return new THREE.MeshStandardMaterial({ color: '#ffffff', map: t, transparent: true, depthWrite: false, roughness: 1 });
+  }, []);
+  const mesh = useRef<THREE.Mesh>(null);
+  useFrame(() => {
+    mat.opacity = amount.current;
+    if (mesh.current) mesh.current.visible = amount.current > 0.02;
+  });
+  return (
+    <mesh ref={mesh} rotation={[-Math.PI / 2, 0, 0]} position={[0, 1250, 0]} material={mat}>
+      <planeGeometry args={[120000, 120000, 1, 1]} />
+    </mesh>
   );
 }
 
@@ -143,13 +159,17 @@ function makeInstanced(geo: THREE.BufferGeometry, mat: THREE.Material, inst: Ins
 const ROCK_GEO = rockGeometry();
 const SERAC_GEO = seracGeometry();
 const CREVASSE_GEO = crevasseGeometry();
+const TREE_GEO = treeGeometry();
 
 /** High-detail ground, boulders, seracs and crevasses around the climber. */
 function DetailPatch({ patch }: { patch: Grid }) {
   const mat = useGroundMaterial(0);
   const geo = useMemo(() => terrainGeometry(patch), [patch]);
   const objects = useMemo(() => {
-    const { rocks, seracs, crevasses } = scatter(patch);
+    const { rocks, seracs, crevasses, trees } = scatter(patch);
+    const treeMesh = makeInstanced(TREE_GEO, new THREE.MeshStandardMaterial({ vertexColors: true, roughness: 0.95 }), trees);
+    treeMesh.castShadow = true;
+    treeMesh.receiveShadow = true;
     const rockMesh = makeInstanced(ROCK_GEO, new THREE.MeshStandardMaterial({ roughness: 0.95, flatShading: true }), rocks);
     rockMesh.castShadow = true;
     rockMesh.receiveShadow = true;
@@ -166,7 +186,7 @@ function DetailPatch({ patch }: { patch: Grid }) {
       crevasses,
     );
     crevMesh.receiveShadow = true;
-    return [rockMesh, seracMesh, crevMesh];
+    return [rockMesh, seracMesh, crevMesh, treeMesh];
   }, [patch]);
   useEffect(() => () => {
     geo.dispose();
@@ -355,33 +375,7 @@ function ParadiseInn({ at }: { at: Vec3 }) {
   );
 }
 
-// ---------- horizon ----------
-
-/** Real neighbors, placed by bearing and distance. Hood is pulled in to stay inside the far plane. */
-const PEAKS: { name: string; p: Vec3; r: number; h: number }[] = [
-  { name: 'Adams', p: [19770, 900, 69310], r: 9500, h: 2850 },
-  { name: 'St. Helens', p: [-33840, 900, 70560], r: 7500, h: 1650 },
-  { name: 'Hood', p: [2800, 820, 110000], r: 5800, h: 1600 },
-];
-
-function DistantPeaks() {
-  return (
-    <group>
-      {PEAKS.map((k) => (
-        <group key={k.name} position={k.p}>
-          <mesh position={[0, k.h / 2, 0]}>
-            <coneGeometry args={[k.r, k.h, 48]} />
-            <meshStandardMaterial color="#5b6b7c" roughness={1} fog={false} />
-          </mesh>
-          <mesh position={[0, k.h * 0.78, 0]}>
-            <coneGeometry args={[k.r * 0.44, k.h * 0.44, 48]} />
-            <meshStandardMaterial color="#d6e0ea" roughness={0.9} fog={false} />
-          </mesh>
-        </group>
-      ))}
-    </group>
-  );
-}
+// ---------- night sky ----------
 
 function Stars({ night }: { night: React.MutableRefObject<number> }) {
   const geometry = useMemo(() => {
@@ -533,14 +527,17 @@ function daylight(clock: number) {
   return { day, dawn };
 }
 
-/** Fog near/far in meters. Clear July air still hazes distant ridges blue. */
-function fogFor(weather: Weather): [number, number] {
+/**
+ * Exponential haze density. Clear July air: ridges 50 km away turn blue, Mount Hood at 160 km is
+ * a pale shape. In a whiteout you see a rope length.
+ */
+function fogFor(weather: Weather) {
   switch (weather) {
-    case 'whiteout': return [6, 70];
-    case 'storm': return [12, 160];
-    case 'windy': return [900, 22000];
-    case 'coldsnap': return [1500, 30000];
-    default: return [2500, 45000];
+    case 'whiteout': return 0.03;
+    case 'storm': return 0.012;
+    case 'windy': return 0.000022;
+    case 'coldsnap': return 0.000014;
+    default: return 0.0000095;
   }
 }
 
@@ -571,7 +568,8 @@ function World(props: SceneProps) {
   const sky = useMemo(() => new THREE.Color(SKY_DAY), []);
   const zenith = useMemo(() => new THREE.Color(SKY_DAY), []);
   const horizon = useMemo(() => new THREE.Color(SKY_DAY), []);
-  const fog = useMemo(() => new THREE.Fog(SKY_DAY, 2500, 45000), []);
+  const fog = useMemo(() => new THREE.FogExp2(SKY_DAY.getHex(), 0.00001), []);
+  const clouds = useRef(0);
 
   const follow = props.mode === 'follow';
   const [patch, setPatch] = useState<Grid | null>(() => {
@@ -591,9 +589,6 @@ function World(props: SceneProps) {
     scene.background = sky;
     scene.fog = fog;
     scene.add(lampTarget.current);
-    for (const g of [climber.current, partner.current]) {
-      g?.traverse((o) => { o.castShadow = true; });
-    }
   }, [scene, sky, fog]);
 
   const latest = useRef(props);
@@ -678,13 +673,19 @@ function World(props: SceneProps) {
     if (p.weather === 'whiteout') want.lerp(SKY_WHITEOUT, 0.85 * Math.max(0.3, day));
     if (p.weather === 'storm') want.lerp(SKY_STORM, 0.8 * Math.max(0.3, day));
     sky.lerp(want, Math.min(1, dt * 1.5));
-    zenith.copy(sky).multiplyScalar(0.6).lerp(SKY_NIGHT, night.current * 0.5);
+    // Thinner air above you: the sky overhead deepens toward navy as you climb.
+    const thin = Math.max(0, Math.min(1, ((follow ? here.y : 3500) - 1600) / 2800));
+    zenith.copy(sky).multiplyScalar(0.6 - 0.22 * thin).lerp(SKY_NIGHT, night.current * 0.5);
     horizon.copy(sky).lerp(WHITE, 0.35 * day).lerp(SKY_NIGHT, night.current * 0.35);
     fog.color.copy(horizon);
     scene.background = horizon;
-    const [near, far] = follow ? fogFor(p.weather) : [9000, 90000];
-    fog.near += (near - fog.near) * Math.min(1, dt * 1.5);
-    fog.far += (far - fog.far) * Math.min(1, dt * 1.5);
+    const density = follow ? fogFor(p.weather) : 0.0000075;
+    fog.density += (density - fog.density) * Math.min(1, dt * 1.5);
+    // Morning cloud sea below the mountain when the weather is settled.
+    const mod = minuteOfDay(p.clock) / 60;
+    const settled = p.weather === 'clear' || p.weather === 'coldsnap' ? 1 : p.weather === 'windy' ? 0.5 : 0;
+    const morning = mod > 5 && mod < 13 ? 1 - Math.max(0, mod - 10) / 3 : 0.35;
+    clouds.current += (settled * morning * 0.95 * Math.max(0.25, day) - clouds.current) * Math.min(1, dt);
 
     if (sun.current) {
       const m = minuteOfDay(p.clock);
@@ -779,17 +780,13 @@ function World(props: SceneProps) {
       {patch && <DetailPatch patch={patch} />}
       <RouteTrack highlight={routeHighlight} />
       <RouteMarkers wands={props.wands} patchId={patch ? patch.cx * 1e5 + patch.cz : 0} />
-      <DistantPeaks />
+      <CloudSea amount={clouds} />
       <Snowfall intensity={snow} center={camTarget} />
       <group ref={climber}>
-        <group scale={PERSON}>
-          <Climber look={props.look} motion={motion} />
-        </group>
+        <Climber look={props.look} motion={motion} />
       </group>
       <group ref={partner}>
-        <group scale={PERSON}>
-          <Climber look={props.partnerLook} motion={partnerMotion} />
-        </group>
+        <Climber look={props.partnerLook} motion={partnerMotion} />
       </group>
       <primitive object={ropeObj} />
     </>
@@ -799,7 +796,11 @@ function World(props: SceneProps) {
 export function MountainScene(props: SceneProps) {
   const start = nodePosition(props.node);
   return (
-    <Canvas shadows camera={{ position: [start[0], start[1] + 4, start[2] + 8], fov: 62, near: 0.3, far: 160000 }}>
+    <Canvas
+      shadows
+      camera={{ position: [start[0], start[1] + 4, start[2] + 8], fov: 62, near: 0.5, far: 400000 }}
+      onCreated={({ gl }) => { gl.toneMappingExposure = 1.2; }}
+    >
       <World {...props} />
     </Canvas>
   );

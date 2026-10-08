@@ -46,5 +46,6 @@ if __name__ == "__main__":
         print(f"{name:16s} DEM {float(sample(la, lo, 13)):7.0f} m   published {want} m")
     core = grid(11000, 769, 13)
     far = grid(45000, 257, 10)
-    np.save(f"{D}/core.npy", core); np.save(f"{D}/far.npy", far)
+    horizon = grid(175000, 385, 8)
+    np.save(f"{D}/core.npy", core); np.save(f"{D}/far.npy", far); np.save(f"{D}/horizon.npy", horizon)
     print("core", core.shape, core.min(), core.max(), " far", far.shape, far.min(), far.max())

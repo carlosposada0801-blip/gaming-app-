@@ -6,6 +6,7 @@ import numpy as np
 D, OUT = sys.argv[1], sys.argv[2]
 core = np.load(f"{D}/core.npy")
 far = np.load(f"{D}/far.npy")
+horizon = np.maximum(np.load(f"{D}/horizon.npy"), 0)
 route = json.load(open(f"{D}/route.json"))
 
 def enc(a):
@@ -16,10 +17,12 @@ with open(OUT, "w") as f:
     f.write("// Elevation: AWS Terrain Tiles (Terrarium), derived from USGS 3DEP / SRTM. Public domain / open data.\n")
     f.write("// Local frame: x = meters east, z = meters south of 46.825 N, 121.750 W; heights in meters above sea level.\n\n")
     f.write(f"export const CORE_HALF = 11000;\nexport const CORE_N = {core.shape[0]};\n")
-    f.write(f"export const FAR_HALF = 45000;\nexport const FAR_N = {far.shape[0]};\n\n")
+    f.write(f"export const FAR_HALF = 45000;\nexport const FAR_N = {far.shape[0]};\n")
+    f.write(f"export const HORIZON_HALF = 175000;\nexport const HORIZON_N = {horizon.shape[0]};\n\n")
     f.write("export const WAYPOINTS: { name: string; x: number; z: number; dem: number }[] = ")
     f.write(json.dumps([{k: p[k] for k in ("name", "x", "z", "dem")} for p in route], indent=2))
     f.write(";\n\n")
     f.write(f"export const CORE_B64 =\n  '{enc(core)}';\n\n")
-    f.write(f"export const FAR_B64 =\n  '{enc(far)}';\n")
+    f.write(f"export const FAR_B64 =\n  '{enc(far)}';\n\n")
+    f.write(f"export const HORIZON_B64 =\n  '{enc(horizon)}';\n")
 print("wrote", OUT)

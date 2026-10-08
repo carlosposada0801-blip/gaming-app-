@@ -21,6 +21,10 @@ function rng(seed: number) {
 }
 
 const UP = new THREE.Vector3(0, 1, 0);
+const smooth01 = (t: number) => {
+  const c = Math.max(0, Math.min(1, t));
+  return c * c * (3 - 2 * c);
+};
 
 /** Surface normal from the patch heights. */
 function normalAt(x: number, z: number) {
@@ -35,6 +39,7 @@ export function scatter(patch: Grid) {
   const rocks: Instances = { matrices: [], colors: [] };
   const seracs: Instances = { matrices: [], colors: [] };
   const crevasses: Instances = { matrices: [], colors: [] };
+  const trees: Instances = { matrices: [], colors: [] };
   const span = patch.half - 40;
   const q = new THREE.Quaternion();
   const m = new THREE.Matrix4();
@@ -48,6 +53,18 @@ export function scatter(patch: Grid) {
     const s = slopeAt(x, z);
     const cover = snowCover(x, y, z, s.deg, s.north);
     const glacier = glacierness(x, y, z) * cover;
+
+    // Subalpine fir and mountain hemlock in clumps across the Paradise meadows.
+    if (trees.matrices.length < 700 && y < 1950 && cover < 0.3 && s.deg < 34 && track > 5
+      && fbm(x * 0.012 + 7, z * 0.012 - 3) > 0.52 - (1750 - y) / 1500 && rand() < 0.95) {
+      const hgt = (5 + rand() * 12) * (1 - smooth01((y - 1700) / 250) * 0.55);
+      q.setFromEuler(new THREE.Euler(0, rand() * Math.PI * 2, 0));
+      m.compose(new THREE.Vector3(x, y - 0.2, z), q, new THREE.Vector3(hgt * (0.85 + rand() * 0.3), hgt, hgt * (0.85 + rand() * 0.3)));
+      trees.matrices.push(m.clone());
+      const g = 0.75 + rand() * 0.35;
+      trees.colors.push(new THREE.Color(g, g, g));
+      continue;
+    }
 
     // Boulders and talus: common on bare ground, rare erratics on snow.
     if (rocks.matrices.length < 520 && y > 1650 && (cover < 0.45 ? rand() < 0.75 : rand() < 0.02)) {
@@ -101,7 +118,7 @@ export function scatter(patch: Grid) {
       }
     }
   }
-  return { rocks, seracs, crevasses };
+  return { rocks, seracs, crevasses, trees };
 }
 
 // ---------- shared geometries ----------
@@ -172,6 +189,44 @@ export function crevasseGeometry() {
   g.setIndex(index);
   g.computeVertexNormals();
   return g;
+}
+
+/** Merges non-indexed copies of geometries, painting each a flat vertex color. */
+function merge(parts: { geo: THREE.BufferGeometry; color: [number, number, number] }[]) {
+  const pos: number[] = [];
+  const col: number[] = [];
+  for (const { geo, color } of parts) {
+    const g = geo.index ? geo.toNonIndexed() : geo;
+    const p = g.attributes.position as THREE.BufferAttribute;
+    for (let i = 0; i < p.count; i++) {
+      pos.push(p.getX(i), p.getY(i), p.getZ(i));
+      col.push(...color);
+    }
+  }
+  const out = new THREE.BufferGeometry();
+  out.setAttribute('position', new THREE.Float32BufferAttribute(pos, 3));
+  out.setAttribute('color', new THREE.Float32BufferAttribute(col, 3));
+  out.computeVertexNormals();
+  return out;
+}
+
+/** A subalpine fir: a narrow spire of drooping tiers on a short trunk. Unit height. */
+export function treeGeometry() {
+  const parts: { geo: THREE.BufferGeometry; color: [number, number, number] }[] = [];
+  const trunk = new THREE.CylinderGeometry(0.018, 0.03, 0.25, 6);
+  trunk.translate(0, 0.12, 0);
+  parts.push({ geo: trunk, color: [0.12, 0.08, 0.05] });
+  const tiers = 6;
+  for (let i = 0; i < tiers; i++) {
+    const t = i / tiers;
+    const r = 0.2 * (1 - t) + 0.03;
+    const h = 0.32 * (1 - t * 0.5);
+    const cone = new THREE.ConeGeometry(r, h, 9, 1, true);
+    cone.translate(0, 0.16 + t * 0.78 + h / 2, 0);
+    const g = 0.09 + 0.03 * ((i * 37) % 5) / 5;
+    parts.push({ geo: cone, color: [g * 0.45, g, g * 0.6] });
+  }
+  return merge(parts);
 }
 
 export { UP };

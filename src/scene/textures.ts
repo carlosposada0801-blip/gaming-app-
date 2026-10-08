@@ -77,3 +77,36 @@ export function detailTextures() {
   cached = { grain: make(grain), normal: make(normal) };
   return cached;
 }
+
+let clouds: THREE.DataTexture | null = null;
+
+/** Soft, tileable cumulus tops: white with alpha from billowing noise. */
+export function cloudTexture() {
+  if (clouds) return clouds;
+  const n = SIZE;
+  const data = new Uint8Array(n * n * 4);
+  for (let y = 0; y < n; y++) {
+    for (let x = 0; x < n; x++) {
+      let f = 0;
+      let amp = 0.5;
+      let p = 4;
+      for (let o = 0; o < 5; o++) {
+        f += amp * pnoise((x / n) * p + 3.1, (y / n) * p + 7.7, p);
+        amp *= 0.5;
+        p *= 2;
+      }
+      const a = Math.max(0, Math.min(1, (f - 0.36) / 0.22));
+      const i = (y * n + x) * 4;
+      const shade = Math.round(215 + 40 * a);
+      data[i] = data[i + 1] = data[i + 2] = shade;
+      data[i + 3] = Math.round(a * 255);
+    }
+  }
+  clouds = new THREE.DataTexture(data, n, n, THREE.RGBAFormat, THREE.UnsignedByteType);
+  clouds.wrapS = clouds.wrapT = THREE.RepeatWrapping;
+  clouds.magFilter = THREE.LinearFilter;
+  clouds.minFilter = THREE.LinearMipmapLinearFilter;
+  clouds.generateMipmaps = true;
+  clouds.needsUpdate = true;
+  return clouds;
+}

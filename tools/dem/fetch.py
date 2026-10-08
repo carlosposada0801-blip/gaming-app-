@@ -45,7 +45,7 @@ if __name__ == "__main__":
     import json
     lat0, lon0 = 46.825, -121.750
     meta = {}
-    for z, half in [(13, 11000), (10, 45000)]:
+    for z, half in [(13, 11000), (10, 45000), (8, 175000)]:
         img, tx0, ty0 = mosaic(lat0, lon0, half, z)
         meta[z] = {"tx0": tx0, "ty0": ty0, "w": img.shape[1], "h": img.shape[0]}
     json.dump({"lat0": lat0, "lon0": lon0, "mosaics": meta}, open(f"{OUT}/meta.json", "w"))
