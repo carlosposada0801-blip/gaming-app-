@@ -1,4 +1,5 @@
 import { GEAR_BY_ID } from './gear';
+import type { Season } from './season';
 import type { EndingId, GameState } from './types';
 
 export interface EndingInfo {
@@ -63,6 +64,12 @@ export const ENDINGS: Record<EndingId, EndingInfo> = {
     lesson: 'Carry a GPS with the route loaded, a map and compass, and wands. Carry an emergency bivy in case you’re stuck.',
     good: false,
   },
+  avalanche: {
+    title: 'Caught in an avalanche',
+    body: 'The slope fractured above you and carried you down. Rescuers dug you out, badly hurt.',
+    lesson: 'In spring, carry a transceiver, probe and shovel, dig a pit before committing to a loaded slope, and cross one at a time. Turning around is often the only safe call.',
+    good: false,
+  },
   partner: {
     title: 'Partner down',
     body: 'Your partner collapsed with HACE high on the mountain. A rescue team brought them down.',
@@ -79,6 +86,8 @@ export function computeScore(s: GameState): number {
   if (s.flags.goodCall) score += 250;
   score += Math.round(s.stats.stamina + s.stats.warmth + s.stats.morale);
   if (s.flags.frostnip) score -= 100;
+  if (s.flags.frostbiteHands || s.flags.frostbiteFeet) score -= 250;
+  else if (s.flags.frostnipHands || s.flags.frostnipFeet) score -= 100;
   if (s.flags.snowBlind) score -= 100;
   if (s.flags.ankle) score -= 80;
   if (s.flags.pushedPastTurnaround) score -= 150;
@@ -86,7 +95,7 @@ export function computeScore(s: GameState): number {
 }
 
 /** Gear-specific tips for the debrief. */
-export function gearReview(packed: string[]): string[] {
+export function gearReview(packed: string[], season: Season = 'july'): string[] {
   const tips: string[] = [];
   const has = (id: string) => packed.includes(id);
   if (!has('helmet')) tips.push('No helmet. Rockfall at Cathedral Gap and on the Cleaver is common.');
@@ -94,9 +103,14 @@ export function gearReview(packed: string[]): string[] {
   if (!has('axe')) tips.push('No ice axe. Without one, a slip on steep snow can’t be stopped.');
   if (!has('crampons_steel') && !has('crampons_alu')) tips.push('No crampons. Hard morning ice above Muir needs them.');
   if (has('crampons_alu')) tips.push('Aluminum crampons dull on the Cleaver’s rock. Steel is the Rainier standard.');
-  if (has('boots_hiking')) tips.push('Hiking boots flex out of crampons and leave your feet cold. Use stiff mountaineering boots.');
+  if (has('boots_hiking')) tips.push('Hiking boots flex out of crampons, soak through in snow, and leave your toes cold. Use stiff mountaineering boots.');
+  if (!has('mitts')) tips.push('No mittens. In wind above 13,000 ft, gloves alone often aren’t enough for your fingers.');
   if (has('cotton')) tips.push('Cotton soaks up sweat and stays wet. Stick to synthetics and wool.');
-  if (has('avy')) tips.push('Avalanche gear is about 4.4 lb of extra weight on a summer Cleaver climb.');
+  if (season === 'may' && !has('avy')) tips.push('No transceiver, probe or shovel. Spring slopes slide, and without them nobody can find you.');
+  if (season === 'may' && !has('snowshoes')) tips.push('No snowshoes. Spring snow below Muir is deep and soft by late morning.');
+  if (season !== 'may' && has('avy')) tips.push('Avalanche gear is about 4.4 lb of extra weight on a summer Cleaver climb.');
+  if (season !== 'may' && has('snowshoes')) tips.push('Snowshoes are dead weight once the trail melts out.');
+  if (season === 'september' && !has('screws')) tips.push('No ice screws. Late-season glaciers are hard ice where a picket won’t hold.');
   if (!has('glasses')) tips.push('No glacier glasses. Snow blindness can set in within hours on a sunny snowfield.');
   if (!has('parka')) tips.push('No parka. Breaks and the summit get very cold.');
   if (!has('gps') && !has('map')) tips.push('No navigation. The Muir Snowfield whiteout is a classic trap.');

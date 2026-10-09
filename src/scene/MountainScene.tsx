@@ -5,11 +5,12 @@ import { Climber, type ClimberLook, type Motion } from './Climber';
 import { crevasseGeometry, rockGeometry, scatter, seracGeometry, treeGeometry, type Instances } from './features';
 import {
   CORE_MESH, FAR, HORIZON, PATCH_HALF, ROUTE, ROUTE_SPACING, SUMMIT_POS, buildPatch, currentPatch, earthDrop, groundColor,
-  inside, nodePosition, routeIndexAt, slopeAt, snowCover, surfaceAt, type Grid, type Vec3,
+  inside, nodePosition, routeIndexAt, sceneSeason, setSceneSeason, slopeAt, snowCover, surfaceAt, type Grid, type Vec3,
 } from './terrain';
 import { cloudTexture, detailTextures, grassTexture } from './textures';
 import { flowerGeometry, grassGeometry, meadowScatter, swaying, tickWind } from './vegetation';
-import { ALPINE_START, LEGS, MUIR, SUMMIT as SUMMIT_NODE, minuteOfDay } from '../game/route';
+import { LEGS, MUIR, SUMMIT as SUMMIT_NODE, minuteOfDay } from '../game/route';
+import { SEASONS, type Season } from '../game/season';
 import type { Weather } from '../game/types';
 
 export interface CameraControl {
@@ -37,6 +38,23 @@ export interface SceneProps {
   live?: React.MutableRefObject<LiveMove>;
   /** Freeze rendering (the last frame stays on screen), e.g. while a skill mini-game is open. */
   paused?: boolean;
+  /** Snowline, meadow color, daylight hours and the other parties' start time follow the season. */
+  season?: Season;
+}
+
+/** Daylight and the summit-day start for the season on screen. */
+const sceneDay = { dawn: SEASONS.july.dawn, dusk: SEASONS.july.dusk, alpine: SEASONS.july.alpineStart };
+
+function useSceneSeason(season: Season) {
+  // Runs during render, before the terrain, patch and meadow are built below.
+  if (sceneSeason.key !== season) {
+    const info = SEASONS[season];
+    setSceneSeason(season, info.sceneSnowShift, season === 'september' ? 0.85 : 0);
+  }
+  const info = SEASONS[season];
+  sceneDay.dawn = info.dawn;
+  sceneDay.dusk = info.dusk;
+  sceneDay.alpine = info.alpineStart;
 }
 
 export interface LiveMove {
@@ -99,16 +117,20 @@ function terrainGeometry(g: Grid, opts: { lower?: (x: number, z: number) => numb
   return geo;
 }
 
-// The mountain and its surroundings never change, so build them once and share between screens.
-let coreGeo: THREE.BufferGeometry | null = null;
-let farGeo: THREE.BufferGeometry | null = null;
-let horizonGeo: THREE.BufferGeometry | null = null;
+// The mountain and its surroundings only change with the season's snow, so build them once per
+// season and share between screens.
+const terrainCache = new Map<string, { coreGeo: THREE.BufferGeometry; farGeo: THREE.BufferGeometry; horizonGeo: THREE.BufferGeometry }>();
 function staticTerrain() {
-  if (!coreGeo) coreGeo = terrainGeometry(CORE_MESH);
-  // Each outer ring tucks under the one inside it, and follows the curve of the Earth.
-  if (!farGeo) farGeo = terrainGeometry(FAR, { lower: (x, z) => earthDrop(x, z) + (inside(CORE_MESH, x, z, -400) ? 150 : 0) });
-  if (!horizonGeo) horizonGeo = terrainGeometry(HORIZON, { lower: (x, z) => earthDrop(x, z) + (inside(FAR, x, z, -2000) ? 400 : 0) });
-  return { coreGeo, farGeo, horizonGeo };
+  const hit = terrainCache.get(sceneSeason.key);
+  if (hit) return hit;
+  const built = {
+    coreGeo: terrainGeometry(CORE_MESH),
+    // Each outer ring tucks under the one inside it, and follows the curve of the Earth.
+    farGeo: terrainGeometry(FAR, { lower: (x, z) => earthDrop(x, z) + (inside(CORE_MESH, x, z, -400) ? 150 : 0) }),
+    horizonGeo: terrainGeometry(HORIZON, { lower: (x, z) => earthDrop(x, z) + (inside(FAR, x, z, -2000) ? 400 : 0) }),
+  };
+  terrainCache.set(sceneSeason.key, built);
+  return built;
 }
 
 function useGroundMaterial(offset: number) {
@@ -128,9 +150,38 @@ function useGroundMaterial(offset: number) {
   }, [offset]);
 }
 
-function StaticTerrain() {
-  const { coreGeo: core, farGeo: far, horizonGeo: horizon } = useMemo(staticTerrain, []);
-  const coreMat = useGroundMaterial(3);
+/**
+ * The core mesh (57 m triangles) can bulge a meter or two above the detail patch, which follows
+ * the same terrain more closely; near the climber those big facets would cover the patch and even
+ * the climber. Inside the patch, the core is not drawn. x, z: patch center; w: half size (0 = off).
+ */
+const patchClip = { value: new THREE.Vector3(0, 0, 0) };
+
+function clipToPatch(mat: THREE.MeshStandardMaterial) {
+  mat.onBeforeCompile = (shader) => {
+    shader.uniforms.uPatch = patchClip;
+    shader.vertexShader = shader.vertexShader
+      .replace('#include <common>', '#include <common>\nvarying vec2 vGroundXZ;')
+      .replace('#include <project_vertex>', '#include <project_vertex>\nvGroundXZ = (modelMatrix * vec4(transformed, 1.0)).xz;');
+    shader.fragmentShader = shader.fragmentShader
+      .replace('#include <common>', '#include <common>\nuniform vec3 uPatch;\nvarying vec2 vGroundXZ;')
+      .replace(
+        '#include <clipping_planes_fragment>',
+        'if (uPatch.z > 0.0 && abs(vGroundXZ.x - uPatch.x) < uPatch.z && abs(vGroundXZ.y - uPatch.y) < uPatch.z) discard;\n#include <clipping_planes_fragment>',
+      );
+  };
+  mat.customProgramCacheKey = () => 'clip-to-patch';
+  return mat;
+}
+
+function StaticTerrain({ season, patch }: { season: string; patch: Grid | null }) {
+  const { coreGeo: core, farGeo: far, horizonGeo: horizon } = useMemo(staticTerrain, [season]);
+  const coreBase = useGroundMaterial(3);
+  const coreMat = useMemo(() => clipToPatch(coreBase), [coreBase]);
+  useEffect(() => {
+    // Leave a margin of a couple of grid steps so the seam at the patch edge stays covered.
+    patchClip.value.set(patch?.cx ?? 0, patch?.cz ?? 0, patch ? patch.half - 2 * patch.step : 0);
+  }, [patch]);
   const farMat = useGroundMaterial(6);
   const horizonMat = useGroundMaterial(10);
   return (
@@ -445,7 +496,7 @@ function teamDist(clock: number, start: number) {
     const i = ROUTE.nodeIndex[k];
     return ROUTE_CUM_LOCAL[i];
   };
-  let t = clock - (ALPINE_START + start);
+  let t = clock - (sceneDay.alpine + start);
   if (t < -40) return null; // still in the hut
   if (t < 0) return nodeD(MUIR) + 15; // gearing up outside the shelter
   // Up at standard pace, 20 minutes on top, down at half the time.
@@ -709,7 +760,7 @@ const WHITE = new THREE.Color('#ffffff');
 
 function daylight(clock: number) {
   const m = minuteOfDay(clock);
-  const t = (m - 330) / (1260 - 330);
+  const t = (m - sceneDay.dawn) / (sceneDay.dusk - sceneDay.dawn);
   if (t <= 0 || t >= 1) return { day: 0, dawn: 0 };
   const day = Math.min(1, Math.sin(Math.PI * t) * 1.6);
   const dawn = t < 0.15 ? 1 - t / 0.15 : t > 0.85 ? (t - 0.85) / 0.15 : 0;
@@ -733,6 +784,8 @@ function fogFor(weather: Weather) {
 // ---------- the live world ----------
 
 function World(props: SceneProps) {
+  const season = props.season ?? 'july';
+  useSceneSeason(season);
   const { scene, camera, size } = useThree();
   const motion = useRef<Motion>({ walking: false, phase: 0 });
   const partnerMotion = useRef<Motion>({ walking: false, phase: 1.5 });
@@ -923,7 +976,7 @@ function World(props: SceneProps) {
 
     if (sun.current) {
       const m = minuteOfDay(p.clock);
-      const ang = ((m - 330) / (1260 - 330)) * Math.PI;
+      const ang = ((m - sceneDay.dawn) / (sceneDay.dusk - sceneDay.dawn)) * Math.PI;
       // Summer sun: rises in the northeast, high in the south at noon, sets in the northwest.
       sunDir.current.set(Math.cos(ang) * 0.8, Math.max(0.05, Math.sin(ang) * 0.9), 0.35 + Math.sin(ang) * 0.4).normalize();
       const focus = follow ? here : new THREE.Vector3(...SUMMIT_POS);
@@ -973,11 +1026,28 @@ function World(props: SceneProps) {
       camPos = new THREE.Vector3(here.x + Math.sin(yaw) * d, here.y + 1.9 + d * 0.06, here.z + Math.cos(yaw) * d);
       const ground = surfaceAt(camPos.x, camPos.z) + 1.2;
       if (camPos.y < ground) camPos.y = ground;
+      // Keep a clear line of sight to the climber's chest over any bump in between.
+      const eyeY = here.y + 1.3;
+      for (let k = 1; k <= 6; k++) {
+        const t = k / 7;
+        const gx = here.x + (camPos.x - here.x) * t;
+        const gz = here.z + (camPos.z - here.z) * t;
+        const need = eyeY + (surfaceAt(gx, gz) + 0.5 - eyeY) / t;
+        if (camPos.y < need) camPos.y = need;
+      }
       const fwd = new THREE.Vector3(-Math.sin(yaw), 0, -Math.cos(yaw));
       const far = at(pos.current + (60 / ROUTE_SPACING) * facingDir);
       const rise = Math.max(-0.3, Math.min(0.6, (far.y - here.y) / 60));
       look = here.clone().add(new THREE.Vector3(0, 1.5, 0)).addScaledVector(fwd, 25);
       look.y += 25 * (0.07 + rise * 0.5);
+      // Below a steep stretch the view tilts up the slope; never so far that the climber drops
+      // behind the controls and panel at the bottom of the screen (~12° below center at most).
+      const chest = here.clone().add(new THREE.Vector3(0, 1.2, 0)).sub(camPos);
+      const toLook = look.clone().sub(camPos);
+      const flat = (v: THREE.Vector3) => Math.hypot(v.x, v.z) || 1e-3;
+      const pitchClimber = Math.atan2(chest.y, flat(chest));
+      const pitchLook = Math.atan2(toLook.y, flat(toLook));
+      if (pitchLook - pitchClimber > 0.21) look.y = camPos.y + flat(toLook) * Math.tan(pitchClimber + 0.21);
     }
     if (snapCamera.current) {
       camera.position.copy(camPos);
@@ -1019,7 +1089,7 @@ function World(props: SceneProps) {
       <SkyDome zenith={zenith} horizon={horizon} />
       <SunDisc dir={sunDir} strength={sunStrength} />
       <Stars night={night} />
-      <StaticTerrain />
+      <StaticTerrain season={season} patch={patch} />
       {patch && <DetailPatch patch={patch} />}
       <RouteTrack highlight={routeHighlight} />
       <RouteMarkers wands={props.wands} patchId={patch ? patch.cx * 1e5 + patch.cz : 0} />

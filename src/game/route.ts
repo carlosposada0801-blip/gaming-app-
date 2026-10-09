@@ -1,4 +1,5 @@
 // The Disappointment Cleaver route on Mount Rainier, the most-climbed route on the mountain.
+import { SEASONS, type Season } from './season';
 
 export interface RouteNode {
   name: string;
@@ -53,9 +54,11 @@ export function minuteOfDay(clock: number) {
   return ((clock % DAY) + DAY) % DAY;
 }
 
-export function isNight(clock: number) {
+/** Dark between sunset and sunrise for the season (July: about 9:00 PM to 5:30 AM). */
+export function isNight(clock: number, season: Season = 'july') {
   const m = minuteOfDay(clock);
-  return m < 330 || m > 1260; // dark before 5:30 AM and after 9:00 PM
+  const { dawn, dusk } = SEASONS[season];
+  return m < dawn || m > dusk;
 }
 
 export function formatClock(clock: number) {

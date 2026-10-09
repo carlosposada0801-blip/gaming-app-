@@ -3,6 +3,7 @@ import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { fmtDuration } from '../game/engine';
 import { ENDINGS, computeScore, gearReview } from '../game/endings';
 import { NODES, START_CLOCK, formatFt } from '../game/route';
+import { SEASONS } from '../game/season';
 import type { GameState } from '../game/types';
 import type { Best } from './storage';
 import { C, NUM } from './theme';
@@ -25,13 +26,24 @@ export function EndScreen({
   const insets = useSafeAreaInsets();
   const ending = ENDINGS[state.ending ?? 'retreat'];
   const score = computeScore(state);
-  const tips = gearReview(state.packed);
+  const tips = gearReview(state.packed, state.season);
   const high = NODES[highestNode];
+  const f = state.flags;
+  const injuries = [
+    f.frostbiteHands ? 'Frostbitten fingers' : f.frostnipHands ? 'Frostnipped fingertips' : null,
+    f.frostbiteFeet ? 'Frostbitten toes' : f.frostnipFeet ? 'Frostnipped toes' : null,
+    f.frostnip ? 'Frostnip on your face' : null,
+    f.snowBlind ? 'Snow blindness' : null,
+    f.sunburn ? 'Bad sunburn' : null,
+    f.ankle ? 'Sprained ankle' : null,
+  ].filter((x): x is string => !!x);
 
   return (
     <View style={styles.root}>
       <ScrollView contentContainerStyle={{ padding: 22, paddingTop: insets.top + 28, paddingBottom: insets.bottom + 120, gap: 18 }}>
-        <Text style={[styles.eyebrow, { color: ending.good ? C.good : C.bad }]}>{ending.good ? 'YOU MADE IT HOME' : 'RESCUED'}</Text>
+        <Text style={[styles.eyebrow, { color: ending.good ? C.good : C.bad }]}>
+          {ending.good ? 'YOU MADE IT HOME' : 'RESCUED'} · {SEASONS[state.season].label.toUpperCase()}
+        </Text>
         <Text style={styles.title}>{ending.title}</Text>
         <Text style={styles.body}>{ending.body}</Text>
 
@@ -46,6 +58,18 @@ export function EndScreen({
           <Text style={styles.section}>THE LESSON</Text>
           <Text style={styles.lessonText}>{ending.lesson}</Text>
         </View>
+
+        {injuries.length > 0 && (
+          <View style={{ gap: 10 }}>
+            <Text style={styles.section}>INJURIES</Text>
+            {injuries.map((t) => (
+              <View key={t} style={styles.tip}>
+                <View style={[styles.bullet, { backgroundColor: C.bad }]} />
+                <Text style={styles.tipText}>{t}</Text>
+              </View>
+            ))}
+          </View>
+        )}
 
         {tips.length > 0 && (
           <View style={{ gap: 10 }}>

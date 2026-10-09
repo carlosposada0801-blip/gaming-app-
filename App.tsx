@@ -4,7 +4,7 @@ import { StatusBar } from 'expo-status-bar';
 import { SafeAreaProvider } from 'react-native-safe-area-context';
 import { newGame } from './src/game/engine';
 import { computeScore } from './src/game/endings';
-import type { GameState } from './src/game/types';
+import type { GameState, Season } from './src/game/types';
 import { ClimbScreen } from './src/ui/ClimbScreen';
 import { EndScreen } from './src/ui/EndScreen';
 import { PackScreen } from './src/ui/PackScreen';
@@ -17,6 +17,7 @@ type Screen = 'title' | 'pack' | 'climb' | 'end';
 export default function App() {
   const [screen, setScreen] = useState<Screen>('title');
   const [packed, setPacked] = useState<string[]>([]);
+  const [season, setSeason] = useState<Season>('july');
   const [game, setGame] = useState<GameState | null>(null);
   const [highestNode, setHighestNode] = useState(0);
   const [best, setBest] = useState<Best | null>(null);
@@ -27,7 +28,7 @@ export default function App() {
   }, []);
 
   function startClimb() {
-    setGame(newGame(packed));
+    setGame(newGame(packed, Math.random, season));
     setHighestNode(0);
     setScreen('climb');
   }
@@ -52,7 +53,14 @@ export default function App() {
       <View style={styles.root}>
         {screen === 'title' && <TitleScreen best={best} onStart={() => setScreen('pack')} />}
         {screen === 'pack' && (
-          <PackScreen packed={packed} setPacked={setPacked} onStart={startClimb} onBack={() => setScreen('title')} />
+          <PackScreen
+            packed={packed}
+            setPacked={setPacked}
+            season={season}
+            setSeason={setSeason}
+            onStart={startClimb}
+            onBack={() => setScreen('title')}
+          />
         )}
         {screen === 'climb' && game && <ClimbScreen state={game} onState={updateGame} onFinish={finishClimb} />}
         {screen === 'end' && game && (

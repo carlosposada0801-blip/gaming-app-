@@ -29,3 +29,17 @@ export async function saveBestIfHigher(run: Best): Promise<Best> {
   }
   return run;
 }
+
+const SOUND_KEY = 'summit-rainier/sound';
+
+export async function loadSoundOn(): Promise<boolean> {
+  try {
+    return (await AsyncStorage.getItem(SOUND_KEY)) !== 'off';
+  } catch {
+    return true;
+  }
+}
+
+export function saveSoundOn(on: boolean) {
+  AsyncStorage.setItem(SOUND_KEY, on ? 'on' : 'off').catch(() => {});
+}

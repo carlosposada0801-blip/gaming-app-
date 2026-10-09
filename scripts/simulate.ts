@@ -1,19 +1,23 @@
 /// <reference types="node" />
 // Plays thousands of seeded climbs with different player styles and reports how they end.
-//   npm run sim                 # 2,000 climbs per style
+//   npm run sim                      # 2,000 climbs per style, in each season
 //   npm run sim -- --runs 500
+//   npm run sim -- --season may      # one season (may | july | september)
 //
 // Styles:
-//   smart     guide's gear list, steady pace, eats/drinks/layers on time, keeps rest-step rhythm,
-//             respects the turnaround time, turns back in a storm or with bad altitude sickness.
-//   legacy    the same player using the old one-tap legs, for comparison with walking.
+//   smart     the season's guide's gear list, steady pace, eats/drinks/layers and gloves on time,
+//             keeps rest-step rhythm, respects the turnaround time, turns back in a storm or with
+//             bad altitude sickness.
+//   legacy    the same player using the old one-tap legs and the usual start, for comparison.
+//   budget    the smart player in hiking boots and aluminum crampons, without mittens.
 //   careless  cotton, hiking boots, aluminum crampons, no parka/glasses/navigation; neglects food,
 //             water and layers; no rhythm; never turns back.
 //   pusher    full gear but always "push hard", ignores the turnaround time and the weather.
 //   cautious  smart, but turns back at the first warning sign.
-import { atStop, chooseEvent, doAction, eventChoices, newGame, warmthTrend } from '../src/game/engine';
+import { chooseEvent, doAction, eventChoices, handOuter, newGame, nextHandWear, partTrend, warmthTrend } from '../src/game/engine';
 import { ENDINGS, computeScore } from '../src/game/endings';
-import { RECOMMENDED } from '../src/game/gear';
+import { RECOMMENDED, recommendedFor } from '../src/game/gear';
+import { SEASON_IDS, SEASONS, type Season } from '../src/game/season';
 import { walkMut, type Stride } from '../src/game/movement';
 import { MUIR, SUMMIT, formatClock, isNight } from '../src/game/route';
 import type { EndingId, GameState, Rng } from '../src/game/types';
@@ -33,7 +37,7 @@ interface Policy {
   name: string;
   /** Typical skill performance (0..1) in the Phase 2 mini-games; undefined = classic odds. */
   skill?: number;
-  pack: () => string[];
+  pack: (season: Season) => string[];
   stride: (s: GameState, rng: Rng) => Stride;
   /** An action id to take before moving, or null. */
   maintain: (s: GameState) => string | null;
@@ -71,7 +75,19 @@ function lookahead(s: GameState, rng: Rng, skill?: number) {
   return best;
 }
 
-function careMaintenance(s: GameState, t: { drink: number; eat: number; rest: number; layers: boolean }) {
+/** Warmer gloves when fingers are cooling; back to gloves when mittens aren't needed (they're clumsy). */
+function handCare(s: GameState): string | null {
+  const next = nextHandWear(s);
+  if (next === null) return null;
+  const cur = handOuter(s) === 'mitts' ? 2 : handOuter(s) === 'gloves' ? 1 : 0;
+  if (partTrend(s, 'hands') === 'cold' && next > cur) return 'hands';
+  if (cur === 2 && s.handTemp > 70 && partTrend({ ...s, hands: 1 }, 'hands') === 'ok' && s.packed.includes('gloves')) return 'hands';
+  return null;
+}
+
+function careMaintenance(s: GameState, t: { drink: number; eat: number; rest: number; layers: boolean; early?: boolean }) {
+  // Planners leave Muir an hour before the usual start, to have time in hand at the turnaround.
+  if (t.early && s.node === MUIR && s.dir === 'up' && !s.slept && s.alpineStart >= SEASONS[s.season].alpineStart) return 'alpine';
   if (s.node === MUIR && s.dir === 'up' && !s.slept) return 'sleep';
   if (s.node === MUIR && s.water < 2 && s.packed.includes('stove') && !s.campLeft) return 'melt';
   if (s.stats.hydration < t.drink && s.water >= 0.5) return 'drink';
@@ -82,6 +98,9 @@ function careMaintenance(s: GameState, t: { drink: number; eat: number; rest: nu
     const tryLayer = (d: 1 | -1) => warmthTrend({ ...s, layer: (s.layer + d) as GameState['layer'] });
     if (trend === 'cold' && s.layer < 3 && tryLayer(1) !== 'hot') return 'layer:up';
     if (trend === 'hot' && s.layer > 0 && tryLayer(-1) !== 'cold') return 'layer:down';
+    const h = handCare(s);
+    if (h) return h;
+    if ((s.handTemp < 35 || s.footTemp < 35) && s.restsHere < 2) return 'rest';
   }
   // Going up, time is the scarce thing: break only when you need to. Coming down, rest freely.
   const restBelow = s.dir === 'up' ? Math.min(t.rest, 40) : t.rest;
@@ -121,22 +140,34 @@ function oldTurnBack(s: GameState, cautious: boolean) {
 const CARELESS_PACK = RECOMMENDED.filter((id) => !['parka', 'glasses', 'sun', 'gps', 'map', 'fleece', 'boots_single', 'crampons_steel', 'bivy'].includes(id))
   .concat(['cotton', 'boots_hiking', 'crampons_alu']);
 
+// Common beginner savings: hiking boots, light aluminum crampons, no mittens. Otherwise smart.
+const BUDGET_PACK = (season: Season) => recommendedFor(season).filter((id) => !['boots_single', 'crampons_steel', 'mitts'].includes(id))
+  .concat(['boots_hiking', 'crampons_alu']);
+
 const POLICIES: Policy[] = [
   {
     name: 'smart',
     skill: 0.8,
-    pack: () => [...RECOMMENDED],
+    pack: (season) => recommendedFor(season),
     stride: (_s, rng) => ({ pace: 'steady', rhythm: 0.75 + rng() * 0.2, lateral: 0 }),
-    maintain: (s) => (smartTurnBack(s, false) ? 'turnback' : careMaintenance(s, { drink: 55, eat: 55, rest: 60, layers: true })),
+    maintain: (s) => (smartTurnBack(s, false) ? 'turnback' : careMaintenance(s, { drink: 55, eat: 55, rest: 60, layers: true, early: true })),
     choose: (s, rng) => lookahead(s, rng, POLICIES[0].skill),
   },
   {
     name: 'legacy',
     legacy: true,
-    pack: () => [...RECOMMENDED],
+    pack: (season) => recommendedFor(season),
     stride: () => ({ pace: 'steady', rhythm: 0.8, lateral: 0 }),
     maintain: (s) => (smartTurnBack(s, false) ? 'turnback' : careMaintenance(s, { drink: 55, eat: 55, rest: 60, layers: true })),
     choose: lookahead,
+  },
+  {
+    name: 'budget',
+    skill: 0.8,
+    pack: BUDGET_PACK,
+    stride: (_s, rng) => ({ pace: 'steady', rhythm: 0.75 + rng() * 0.2, lateral: 0 }),
+    maintain: (s) => (smartTurnBack(s, false) ? 'turnback' : careMaintenance(s, { drink: 55, eat: 55, rest: 60, layers: true, early: true })),
+    choose: (s, rng) => lookahead(s, rng, 0.8),
   },
   {
     name: 'careless',
@@ -152,6 +183,7 @@ const POLICIES: Policy[] = [
   {
     name: 'pusher',
     skill: 0.65,
+    // Packs the summer list whatever the season.
     pack: () => [...RECOMMENDED],
     stride: () => ({ pace: 'push', rhythm: 0.45, lateral: 0 }),
     maintain: (s) => careMaintenance(s, { drink: 35, eat: 35, rest: 25, layers: true }),
@@ -160,7 +192,7 @@ const POLICIES: Policy[] = [
   {
     name: 'cautious',
     skill: 0.8,
-    pack: () => [...RECOMMENDED],
+    pack: (season) => recommendedFor(season),
     stride: (_s, rng) => ({ pace: 'steady', rhythm: 0.75 + rng() * 0.2, lateral: 0 }),
     maintain: (s) => (smartTurnBack(s, true) ? 'turnback' : careMaintenance(s, { drink: 55, eat: 55, rest: 60, layers: true })),
     choose: lookahead,
@@ -169,9 +201,9 @@ const POLICIES: Policy[] = [
 
 const CHUNK_M = 40;
 
-function play(policy: Policy, seed: number) {
+function play(policy: Policy, seed: number, season: Season) {
   const rng = mulberry32(seed);
-  let s = newGame(policy.pack(), rng);
+  let s = newGame(policy.pack(season), rng, season);
   let guard = 0;
   let idle = 0;
   while (!s.ending && guard++ < 50000) {
@@ -183,13 +215,13 @@ function play(policy: Policy, seed: number) {
     const act = policy.maintain(s);
     if (act) {
       const next = doAction(s, act, rng);
-      const sig = (x: GameState) => JSON.stringify([x.stats, x.clock, x.dir, x.layer, x.water, x.food, x.slept]);
+      const sig = (x: GameState) => JSON.stringify([x.stats, x.clock, x.dir, x.layer, x.hands, x.water, x.food, x.slept, x.alpineStart]);
       if (sig(next) !== sig(s)) {
         s = next;
         continue;
       }
     }
-    if (isNight(s.clock) && !s.packed.includes('headlamp')) {
+    if (isNight(s.clock, s.season) && !s.packed.includes('headlamp')) {
       s = doAction(s, 'wait', rng);
       continue;
     }
@@ -208,44 +240,60 @@ function play(policy: Policy, seed: number) {
   return s;
 }
 
-function trace(style: string, seed: number) {
+function trace(style: string, seed: number, season: Season) {
   const p = POLICIES.find((x) => x.name === style);
   if (!p) throw new Error(`No style ${style}`);
-  const s = play(p, seed);
+  const s = play(p, seed, season);
   for (const e of [...s.log].reverse()) console.log(`${formatClock(e.clock).padStart(8)}  ${e.text}`);
-  console.log(`\nEnding: ${s.ending}  stats: ${JSON.stringify(s.stats)}`);
+  console.log(`\nEnding: ${s.ending}  stats: ${JSON.stringify(s.stats)}  hands ${Math.round(s.handTemp)} feet ${Math.round(s.footTemp)} wet ${Math.round(s.wet)}`);
 }
 
 function main() {
+  const se = process.argv.indexOf('--season');
+  const seasons: Season[] = se > 0 ? [process.argv[se + 1] as Season] : SEASON_IDS;
+  if (seasons.some((x) => !SEASONS[x])) throw new Error(`Season must be one of ${SEASON_IDS.join(', ')}`);
   const t = process.argv.indexOf('--trace');
-  if (t > 0) return trace(process.argv[t + 1], Number(process.argv[t + 2] ?? 1000));
+  if (t > 0) return trace(process.argv[t + 1], Number(process.argv[t + 2] ?? 1000), seasons.length === 1 ? seasons[0] : 'july');
   // --skill X sets every player's mini-game performance (0..1), to see how much skill matters.
   const sk = process.argv.indexOf('--skill');
   if (sk > 0) for (const p of POLICIES) if (p.skill !== undefined) p.skill = Number(process.argv[sk + 1]);
   const arg = process.argv.indexOf('--runs');
   const runs = arg > 0 ? Number(process.argv[arg + 1]) : 2000;
   const endings = Object.keys(ENDINGS) as EndingId[];
-  console.log(`Summit Rainier simulation: ${runs} climbs per style\n`);
-  const header = ['style', 'summit', 'retreat', ...endings.filter((e) => !ENDINGS[e].good), 'stuck', 'avg score', 'avg hours'];
-  console.log(header.map((h) => h.padStart(10)).join(''));
-  for (const p of POLICIES) {
-    const count: Record<string, number> = {};
-    let score = 0;
-    let hours = 0;
-    for (let i = 0; i < runs; i++) {
-      const s = play(p, 1000 + i);
-      const key = s.ending ?? 'stuck';
-      count[key] = (count[key] ?? 0) + 1;
-      score += computeScore(s);
-      hours += (s.clock - 9 * 60) / 60;
-    }
-    const pct = (k: string) => `${(((count[k] ?? 0) / runs) * 100).toFixed(1)}%`;
-    const row = [p.name, pct('summit'), pct('retreat'), ...endings.filter((e) => !ENDINGS[e].good).map(pct), pct('stuck'),
-      (score / runs).toFixed(0), (hours / runs).toFixed(1)];
-    console.log(row.map((c) => c.padStart(10)).join(''));
-    if (Object.keys(turnReasons).length) {
-      console.log(`${''.padStart(10)}turned back for: ${Object.entries(turnReasons).map(([k, v]) => `${k} ${v}`).join(', ')}`);
-      for (const k of Object.keys(turnReasons)) delete turnReasons[k];
+  const bad = endings.filter((e) => !ENDINGS[e].good);
+  const short: Record<string, string> = { hypothermia: 'hypotherm', exhaustion: 'exhausted', avalanche: 'avalanche' };
+  console.log(`Summit Rainier simulation: ${runs} climbs per style per season`);
+  for (const season of seasons) {
+    console.log(`\n=== ${SEASONS[season].label} ===`);
+    const header = ['style', 'summit', 'retreat', ...bad.map((e) => short[e] ?? e), 'stuck', 'avg score', 'avg hours'];
+    console.log(header.map((h) => h.padStart(10)).join(''));
+    for (const p of POLICIES) {
+      const count: Record<string, number> = {};
+      const cold = { nipHands: 0, nipFeet: 0, bite: 0, face: 0, wet: 0 };
+      let score = 0;
+      let hours = 0;
+      for (let i = 0; i < runs; i++) {
+        const s = play(p, 1000 + i, season);
+        const key = s.ending ?? 'stuck';
+        count[key] = (count[key] ?? 0) + 1;
+        score += computeScore(s);
+        hours += (s.clock - 9 * 60) / 60;
+        if (s.flags.frostnipHands) cold.nipHands++;
+        if (s.flags.frostnipFeet) cold.nipFeet++;
+        if (s.flags.frostbiteHands || s.flags.frostbiteFeet) cold.bite++;
+        if (s.flags.frostnip) cold.face++;
+        if (s.flags.cottonWet || s.wet > 40) cold.wet++;
+      }
+      const pct = (k: string) => `${(((count[k] ?? 0) / runs) * 100).toFixed(1)}%`;
+      const row = [p.name, pct('summit'), pct('retreat'), ...bad.map(pct), pct('stuck'),
+        (score / runs).toFixed(0), (hours / runs).toFixed(1)];
+      console.log(row.map((c) => c.padStart(10)).join(''));
+      const f = (n: number) => `${((n / runs) * 100).toFixed(1)}%`;
+      console.log(`${''.padStart(10)}frostnip hands ${f(cold.nipHands)}, feet ${f(cold.nipFeet)}, face ${f(cold.face)}; frostbite ${f(cold.bite)}; wet layers ${f(cold.wet)}`);
+      if (Object.keys(turnReasons).length) {
+        console.log(`${''.padStart(10)}turned back for: ${Object.entries(turnReasons).map(([k, v]) => `${k} ${v}`).join(', ')}`);
+        for (const k of Object.keys(turnReasons)) delete turnReasons[k];
+      }
     }
   }
 }

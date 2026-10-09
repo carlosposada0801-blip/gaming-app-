@@ -55,7 +55,8 @@ export function scatter(patch: Grid) {
     const glacier = glacierness(x, y, z) * cover;
 
     // Subalpine fir and mountain hemlock in clumps across the Paradise meadows.
-    if (trees.matrices.length < 1400 && y < 1950 && cover < 0.3 && s.deg < 34 && track > 5
+    // Trees grow where the ground melts out in summer, and stand above the spring snow.
+    if (trees.matrices.length < 1400 && y < 1950 && snowCover(x, y, z, s.deg, s.north, 0) < 0.3 && s.deg < 34 && track > 5
       && fbm(x * 0.012 + 7, z * 0.012 - 3) > 0.52 - (1750 - y) / 1500 && rand() < 0.95) {
       const hgt = (5 + rand() * 12) * (1 - smooth01((y - 1700) / 250) * 0.55);
       q.setFromEuler(new THREE.Euler(0, rand() * Math.PI * 2, 0));

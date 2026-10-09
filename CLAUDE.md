@@ -11,7 +11,8 @@ See AGENTS.md for Expo rules (use `npx expo install`, check versioned docs).
 ## Stack
 - Expo SDK 57, React Native 0.86, React 19.2
 - 3D: `three` + `@react-three/fiber` (import from `@react-three/fiber/native`) + `expo-gl`
-- `react-native-safe-area-context`, `expo-haptics`, `@react-native-async-storage/async-storage`, `expo-sensors`
+- `react-native-safe-area-context`, `expo-haptics`, `@react-native-async-storage/async-storage`, `expo-sensors`,
+  `expo-audio`, `expo-speech`
 - `npx expo install` needs api.expo.dev; offline, install the version listed in
   `node_modules/expo/bundledNativeModules.json` with npm (same result).
 - No Expo Router yet: a single game screen state machine in App.tsx is fine for now.
@@ -78,6 +79,33 @@ See AGENTS.md for Expo rules (use `npx expo install`, check versioned docs).
   paused (`paused` prop, frameloop 'never') while a mini-game is open.
 - Balance (approved with Phase 2): past the turnaround time rockfall +0.2, crevasse +0.2, descent
   slips +0.15; push pace builds AMS 1.8x (was 1.5x).
+- Phase 3 realism:
+  - Seasons (`src/game/season.ts`, `GameState.season`, picker on the pack screen): May / July / September
+    change daylight (sunrise equation for Paradise), cold, forecasts, the alpine start (Sept midnight),
+    crevasse, ladder, avalanche and rockfall odds, soft snow below Muir in May (snowshoes), longer
+    routes and hard ice in Sept (more slips, worse self-arrest, ice screws for Z-pulley anchors), and
+    each season's guide's list (`recommendedFor`). Guesses are marked in comments.
+  - Spring avalanche event ("Whumpf": dig a pit with the avy kit, cross one at a time, or turn back) and the
+    `avalanche` ending; buried climbers live by the transceiver.
+  - Hands and feet: `handTemp` / `footTemp` (0..100) cool when glove or boot insulation (`Gear.hand`,
+    `Gear.feet`) plus body heat can't keep up with the cold index; a cold core cools them faster.
+    Numb < 40, frostnip <= 15, frostbite at 0 (forces descent). `hands` (liners / gloves / mittens) is its
+    own setting ("Hands" quick button). Mittens and cold fingers lower rope-skill performance
+    (`skillHandicap`, note shown on the skill card); rope work chills bare-ish hands.
+  - Wet layers: `wet` (0..100) rises when overdressed for the effort (push pace makes more heat) or in
+    storm/whiteout without the shell; clothing insulation x (1 - 0.4 wet). Dries on the move, in the
+    sleeping bag at Muir; cotton never dries.
+  - Pulse oximeter gear item: SpO2 and heart rate for you and your partner (`src/game/vitals.ts`, typical
+    fast-ascent values by altitude); the partner reading drops as their altitude sickness builds.
+  - Alpine start choice at Muir (default / -1 h / +1 h); earlier is colder and darker but leaves time.
+  - Sound (`src/audio/`): generated WAVs (`tools/audio/generate.ts` -> `assets/sounds/`): wind and gust
+    loops by altitude and weather, breathing by effort, crampons on snow / rock and boots on dirt in time
+    with the walk animation, carabiner clinks and rope; "Rock! Rock!", "Falling!", "Avalanche!" via
+    `expo-speech`. Mute chip in the HUD (saved). Credits in README and on the title screen.
+  - Scene: the snowline moves with the season (snow from the parking lot in May, dry pumice trail and
+    straw meadows in Sept, trees stand above spring snow), daylight and other teams follow the season.
+    The core terrain is no longer drawn inside the detail patch (it poked through and hid the climber at
+    Ingraham Flats); the follow camera keeps a clear line of sight and never tilts the climber off screen.
 - `src/ui/theme.ts`: palette, `climberLook(state)`, `partnerLook(state)`, `statColor`.
 - `src/ui/PackScreen.tsx`: gear packing screen with weights and a "guide's list" button.
 
@@ -105,7 +133,11 @@ See AGENTS.md for Expo rules (use `npx expo install`, check versioned docs).
   `--skill 0.3` vs `0.95`: smart falls 6.1% vs 0.7%, summit 46.7% vs 57.9%. Mini-games tested in a
   browser harness: prusik steady 1.0 / sloppy 0.18; ladder hands-off 0 / steering 0.8–1.0;
   self-arrest frozen 0; Z-pulley in order 0.70.
-- Phase 3 Realism (hands/feet frostnip, wet layers, pulse oximeter, seasons, expo-audio sound).
+- Phase 3 Realism: DONE. Sim (2,000 per style per season), summit / retreat / bad:
+  smart May 52.6 / 45.9 / 1.5, July 78.6 / 19.6 / 1.8, Sept 75.5 / 20.8 / 3.7 (smart now picks the
+  earlier alpine start); pusher 33-43% summit; careless 0-24% summit, 54-72% bad endings, frostnip
+  feet 42-97%; budget (hiking boots, alu crampons, no mitts) July 56% summit with 25% frostnip toes,
+  May/Sept 0% (slow, cold feet, turnaround). Cautious ~97% retreat. `npm run sim -- --season may`.
 - Phase 4 Replayability (seeds + daily climb, career mode, routes, skills, partners, badges, modes).
 
 ## Still to do

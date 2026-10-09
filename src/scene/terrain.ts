@@ -258,14 +258,26 @@ export function distToRoute(x: number, z: number) {
 
 // ---------- ground cover ----------
 
-/** How much snow or glacier covers the ground here, 0..1 (July conditions). */
-export function snowCover(x: number, y: number, z: number, slopeDeg: number, north: number) {
+/**
+ * The season the scene shows. `shift` moves the snowline (m) from its July position, `dry` browns
+ * the meadow grass. Set by MountainScene before anything is built.
+ */
+export const sceneSeason = { key: 'july', shift: 0, dry: 0 };
+
+export function setSceneSeason(key: string, shift: number, dry: number) {
+  sceneSeason.key = key;
+  sceneSeason.shift = shift;
+  sceneSeason.dry = dry;
+}
+
+/** How much snow or glacier covers the ground here, 0..1, for the scene's season. */
+export function snowCover(x: number, y: number, z: number, slopeDeg: number, north: number, shift = sceneSeason.shift) {
   const n = fbm(x * 0.0035 + 3, z * 0.0035 - 8);
-  const snowline = 1950 - 260 * north + (n - 0.5) * 320;
+  const snowline = 1950 + shift - 260 * north + (n - 0.5) * 320;
   const patchy = smooth(0.42, 0.58, fbm(x * 0.02, z * 0.02, 3)) * 0.35;
   const altitude = smooth(snowline - 90, snowline + 90, y);
   const steep = smooth(37, 50, slopeDeg + (n - 0.5) * 10);
-  return Math.max(0, Math.min(1, altitude * (1 - steep) - patchy * (1 - smooth(2200, 2500, y))));
+  return Math.max(0, Math.min(1, altitude * (1 - steep) - patchy * (1 - smooth(2200 + shift, 2500 + shift, y))));
 }
 
 /** Glacier ice rather than snowfield, 0..1. */
@@ -302,8 +314,10 @@ export function groundColor(x: number, y: number, z: number, slopeDeg: number, n
   const green = mix3(FOREST, MEADOW, smooth(1350, 1600, y) * (0.55 + 0.45 * smooth(0.3, 0.6, n)));
   let c = mix3(bare, green, (1 - smooth(treeline - 60, treeline + 60, y)) * (1 - smooth(32, 42, slopeDeg)));
 
-  // Snow, with older grey firn in sun cups and blue ice where glaciers steepen.
-  const cover = snowCover(x, y, z, slopeDeg, north);
+  // Snow, with older grey firn in sun cups and blue ice where glaciers steepen. Dense forest
+  // stays dark from afar even when the ground under it is snowed in.
+  const canopy = (1 - smooth(1250, 1500, y)) * 0.6;
+  const cover = snowCover(x, y, z, slopeDeg, north) * (1 - canopy);
   let snow = mix3(SNOW, FIRN, smooth(0.5, 0.75, f) * 0.35 * (1 - smooth(3000, 3600, y)));
   snow = mix3(snow, ICE, glacierness(x, y, z) * smooth(14, 32, slopeDeg) * 0.55);
   c = mix3(c, snow, cover);

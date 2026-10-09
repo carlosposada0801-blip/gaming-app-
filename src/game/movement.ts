@@ -14,6 +14,7 @@ import { NODE_DIST } from './data/routeProfile';
 import { packWeightLb } from './gear';
 import { DAY, LEGS, MUIR, NODES, SUMMIT, formatClock, formatFt, isNight } from './route';
 import type { GameState, Pace, Rng } from './types';
+import { SEASONS } from './season';
 
 /** Game seconds per real second while walking: Paradise to Camp Muir is about 12 minutes of play. */
 export const TIME_SCALE = 32;
@@ -140,14 +141,16 @@ export function walkMut(s: GameState, meters: number, stride: Stride, rng: Rng):
   if (i >= 1 && has(s, 'boots_hiking')) cost *= 1.12;
   if (s.weather === 'storm' || s.weather === 'whiteout') cost *= 1.2;
   if (offTrack) cost *= 1.3; // post-holing in untracked snow
+  if (i <= 1 && SEASONS[s.season].softSnow && !has(s, 'snowshoes')) cost *= 1.2; // spring: sinking in
+  if (s.flags.frostbiteFeet) cost *= 1.15;
   if (restStepActive(s) && forward * (d1 - d0) > 0) cost *= 1.15 - 0.4 * Math.max(0, Math.min(1, stride.rhythm));
   s.stats.stamina -= cost;
 
   // Water, food and warmth by time on the move.
-  const sunny = s.weather === 'clear' && !isNight(s.clock);
+  const sunny = s.weather === 'clear' && !isNight(s.clock, s.season);
   s.stats.hydration -= hours * (8 + (sunny ? 2 : 0));
   s.stats.energy -= hours * 7 * (stride.pace === 'push' ? 1.2 : 1);
-  thermal(s, hours, true, ((e0 + e1) / 2) * M_TO_FT);
+  thermal(s, hours, true, ((e0 + e1) / 2) * M_TO_FT, stride.pace);
 
   // Altitude: climbing above 8,000 ft builds it, losing height relieves it.
   const ft0 = e0 * M_TO_FT;

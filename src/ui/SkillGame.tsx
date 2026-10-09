@@ -15,13 +15,17 @@ export function SkillGame({
   skill,
   title,
   slopeDeg,
-  picket,
+  anchor,
+  note,
   onDone,
 }: {
   skill: SkillId;
   title: string;
   slopeDeg: number;
-  picket: boolean;
+  /** First rigging step of the Z-pulley, e.g. "Bury a picket as the anchor". */
+  anchor: string;
+  /** Why this will be harder than it looks (numb fingers, mittens). */
+  note?: string;
   onDone: (perf: number | undefined) => void;
 }) {
   const [result, setResult] = useState<number | null>(null);
@@ -41,11 +45,12 @@ export function SkillGame({
       <View style={styles.card}>
         <Text style={styles.kicker}>SKILL</Text>
         <Text style={styles.title}>{title}</Text>
+        {note && result === null ? <Text style={styles.note}>{note}</Text> : null}
         {result === null ? (
           <>
             {skill === 'arrest' && <SelfArrest slopeDeg={slopeDeg} onDone={finish} />}
             {skill === 'prusik' && <Prusik onDone={finish} />}
-            {skill === 'zpulley' && <ZPulley picket={picket} onDone={finish} />}
+            {skill === 'zpulley' && <ZPulley anchor={anchor} onDone={finish} />}
             {skill === 'ladder' && <Ladder onDone={finish} />}
             <Pressable
               onPress={() => {
@@ -221,13 +226,13 @@ function Prusik({ onDone }: { onDone: (p: number) => void }) {
  * A simplified 3:1 Z-pulley as taught in glacier courses. Real systems vary in detail
  * (anchor type, where the progress capture sits); this is the common order.
  */
-function ZPulley({ picket, onDone }: { picket: boolean; onDone: (p: number) => void }) {
+function ZPulley({ anchor, onDone }: { anchor: string; onDone: (p: number) => void }) {
   const steps = useMemo(() => [
-    picket ? 'Bury a picket as the anchor' : 'Bury an ice axe as the anchor',
+    anchor,
     'Run the rope through a pulley at the anchor, with a prusik to catch it',
     'Clip a traveling prusik onto the loaded rope',
     'Haul, then slide the traveling prusik back down',
-  ], [picket]);
+  ], [anchor]);
   const order = useMemo(() => [...steps.keys()].sort(() => Math.random() - 0.5), [steps]);
   const [done, setDone] = useState(0);
   const [mistakes, setMistakes] = useState(0);
@@ -402,6 +407,7 @@ const styles = StyleSheet.create({
   card: { backgroundColor: C.panel, borderRadius: 20, padding: 18, gap: 12, borderWidth: 1, borderColor: C.line },
   kicker: { color: C.accent, fontSize: 11, fontWeight: '800', letterSpacing: 1.4 },
   title: { color: C.text, fontSize: 22, fontWeight: '800' },
+  note: { color: C.warn, fontSize: 13, fontWeight: '600', lineHeight: 18 },
   area: { gap: 12, alignItems: 'center', paddingVertical: 8, minHeight: 260, justifyContent: 'center' },
   alert: { color: C.bad, fontSize: 40, fontWeight: '900', letterSpacing: 2 },
   instr: { color: C.text, fontSize: 15, lineHeight: 21, textAlign: 'center' },

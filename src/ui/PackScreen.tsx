@@ -1,7 +1,8 @@
 import { useMemo } from 'react';
 import { Pressable, SectionList, StyleSheet, Text, View } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
-import { CATEGORIES, GEAR, GEAR_BY_ID, RECOMMENDED, packWeightLb, toggleGear, type Gear } from '../game/gear';
+import { CATEGORIES, GEAR, GEAR_BY_ID, packWeightLb, recommendedFor, toggleGear, type Gear } from '../game/gear';
+import { SEASONS, SEASON_IDS, type Season } from '../game/season';
 import { C, NUM } from './theme';
 
 function fmtWeight(oz: number) {
@@ -11,11 +12,15 @@ function fmtWeight(oz: number) {
 export function PackScreen({
   packed,
   setPacked,
+  season,
+  setSeason,
   onStart,
   onBack,
 }: {
   packed: string[];
   setPacked: (ids: string[]) => void;
+  season: Season;
+  setSeason: (s: Season) => void;
   onStart: () => void;
   onBack: () => void;
 }) {
@@ -39,6 +44,20 @@ export function PackScreen({
         <Text style={styles.sub}>
           Two days on the Disappointment Cleaver route: Paradise to Camp Muir, a few hours of sleep, then a midnight start for the summit.
         </Text>
+        <View style={styles.seasons} accessibilityRole="radiogroup">
+          {SEASON_IDS.map((id) => (
+            <Pressable
+              key={id}
+              onPress={() => setSeason(id)}
+              style={[styles.seasonBtn, season === id && styles.seasonOn]}
+              accessibilityRole="radio"
+              accessibilityState={{ selected: season === id }}
+            >
+              <Text style={[styles.seasonText, season === id && { color: '#1a0b03' }]}>{SEASONS[id].label}</Text>
+            </Pressable>
+          ))}
+        </View>
+        <Text style={styles.seasonBlurb}>{SEASONS[season].blurb}</Text>
         <View style={styles.weights}>
           <View style={styles.weightBox}>
             <Text style={styles.weightLabel}>TO CAMP MUIR</Text>
@@ -54,8 +73,8 @@ export function PackScreen({
           </View>
         </View>
         <View style={styles.quick}>
-          <Pressable style={styles.quickBtn} onPress={() => setPacked([...RECOMMENDED])} accessibilityRole="button">
-            <Text style={styles.quickText}>Use a guide's list</Text>
+          <Pressable style={styles.quickBtn} onPress={() => setPacked(recommendedFor(season))} accessibilityRole="button">
+            <Text style={styles.quickText}>Use a guide's {SEASONS[season].label} list</Text>
           </Pressable>
           <Pressable style={styles.quickBtn} onPress={() => setPacked([])} accessibilityRole="button">
             <Text style={styles.quickText}>Empty the pack</Text>
@@ -70,7 +89,12 @@ export function PackScreen({
         contentContainerStyle={{ paddingBottom: 110 + insets.bottom }}
         renderSectionHeader={({ section }) => <Text style={styles.section}>{section.title.toUpperCase()}</Text>}
         renderItem={({ item }) => (
-          <GearRow gear={item} on={packed.includes(item.id)} onPress={() => setPacked(toggleGear(packed, item.id))} />
+          <GearRow
+            gear={item}
+            on={packed.includes(item.id)}
+            seasonal={SEASONS[season].extraGear.includes(item.id) ? SEASONS[season].label : undefined}
+            onPress={() => setPacked(toggleGear(packed, item.id))}
+          />
         )}
       />
 
@@ -95,7 +119,7 @@ export function PackScreen({
   );
 }
 
-function GearRow({ gear, on, onPress }: { gear: Gear; on: boolean; onPress: () => void }) {
+function GearRow({ gear, on, seasonal, onPress }: { gear: Gear; on: boolean; seasonal?: string; onPress: () => void }) {
   return (
     <Pressable
       onPress={onPress}
@@ -111,6 +135,7 @@ function GearRow({ gear, on, onPress }: { gear: Gear; on: boolean; onPress: () =
           <Text style={[styles.name, !on && { color: C.muted }]} numberOfLines={2}>{gear.name}</Text>
           <Text style={[styles.oz, NUM]}>{fmtWeight(gear.oz)}</Text>
         </View>
+        {seasonal ? <Text style={styles.tag}>Guides add this in {seasonal}</Text> : null}
         <Text style={styles.note}>{gear.note}</Text>
       </View>
     </Pressable>
@@ -128,6 +153,12 @@ const styles = StyleSheet.create({
   weightLabel: { color: C.faint, fontSize: 10, fontWeight: '700', letterSpacing: 1 },
   weightNum: { color: C.text, fontSize: 20, fontWeight: '700', marginTop: 2 },
   quick: { flexDirection: 'row', gap: 8 },
+  seasons: { flexDirection: 'row', gap: 6 },
+  seasonBtn: { flex: 1, borderWidth: 1, borderColor: C.line, borderRadius: 10, paddingVertical: 8, alignItems: 'center' },
+  seasonOn: { backgroundColor: C.accent, borderColor: C.accent },
+  seasonText: { color: C.text, fontSize: 14, fontWeight: '700' },
+  seasonBlurb: { color: C.muted, fontSize: 13, lineHeight: 18 },
+  tag: { color: C.warn, fontSize: 11, fontWeight: '700', marginTop: 3 },
   quickBtn: { borderWidth: 1, borderColor: C.line, borderRadius: 999, paddingVertical: 7, paddingHorizontal: 14 },
   quickText: { color: C.ice, fontSize: 13, fontWeight: '600' },
   section: {

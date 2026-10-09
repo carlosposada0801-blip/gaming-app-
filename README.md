@@ -18,8 +18,9 @@ altitude sickness, morale, weather and time.
 ## Balance simulation
 
 ```sh
-npm run sim                       # 2,000 seeded climbs per player style
-npm run sim -- --trace smart 1001 # one climb's field notes
+npm run sim                                       # 2,000 seeded climbs per style, per season
+npm run sim -- --season may                       # one season: may | july | september
+npm run sim -- --trace smart 1001 --season july   # one climb's field notes
 ```
 
 ## Put it on the App Store
@@ -40,3 +41,12 @@ See `CLAUDE.md` for how the game is put together.
 
 Terrain is the real Mount Rainier: elevation data from AWS Terrain Tiles (Terrarium), derived from
 USGS 3DEP and SRTM. See `tools/dem/` to regenerate it.
+
+Sound effects (wind, gusts, breathing, crampons on snow and rock, boots on the trail, carabiner
+clinks, rope) are synthesized from noise and sine waves by `tools/audio/generate.ts`
+(`npx tsx tools/audio/generate.ts`); no recordings are used. Rope-team calls ("Rock!",
+"Falling!") are spoken by the phone's built-in text-to-speech voice through `expo-speech`.
+
+The climber's skeleton and Walk / Idle motion come from the `Soldier.glb` example model in the
+three.js repository (a Mixamo character). Check Mixamo's license terms before publishing to the
+App Store.

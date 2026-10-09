@@ -3,8 +3,8 @@ import { PanResponder, Pressable, ScrollView, StyleSheet, Text, View, useWindowD
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import * as Haptics from 'expo-haptics';
 import {
-  LAYER_LABEL, WEATHER_LABEL, atStop, chooseEvent, clone, currentFt, doAction, elevAt, eventChoices, listActions,
-  moveBlockedReason, roped, warmthTrend, type Action,
+  HAND_LABEL, LAYER_LABEL, WEATHER_LABEL, atStop, chooseEvent, clone, currentFt, doAction, elevAt, eventChoices, handOuter,
+  handicapNote, listActions, moveBlockedReason, partTrend, roped, warmthTrend, type Action,
 } from '../game/engine';
 import {
   TIME_SCALE, beatSeconds, breathsPerStep, legAt, metersToNext, nextStopName, restStepActive, speed, walkMut,
@@ -16,23 +16,32 @@ import type { GameState, LogEntry, Pace, Stats } from '../game/types';
 import { MountainScene, type CameraControl, type LiveMove } from '../scene/MountainScene';
 import { RestStep } from './RestStep';
 import { SkillGame } from './SkillGame';
-import { legOf } from '../game/skills';
+import { anchorStep, legOf } from '../game/skills';
 import { has } from '../game/helpers';
+import { SEASONS } from '../game/season';
+import { oxConcern, readPartnerOx, readPulseOx } from '../game/vitals';
+import { useClimbAudio } from '../audio/useClimbAudio';
+import { loadSoundOn, saveSoundOn } from './storage';
 import type { SkillId } from '../game/types';
 import { Thumbstick, type Stick } from './Thumbstick';
 import { C, NUM, climberLook, partnerLook, statColor } from './theme';
 
-const VITALS: { key: keyof Stats; label: string; inverted?: boolean }[] = [
+type VitalKey = keyof Stats | 'hands' | 'feet';
+const VITALS: { key: VitalKey; label: string; inverted?: boolean }[] = [
   { key: 'stamina', label: 'Stamina' },
   { key: 'warmth', label: 'Warmth' },
   { key: 'hydration', label: 'Water' },
   { key: 'energy', label: 'Energy' },
   { key: 'ams', label: 'Altitude', inverted: true },
   { key: 'morale', label: 'Morale' },
+  { key: 'hands', label: 'Hands' },
+  { key: 'feet', label: 'Feet' },
 ];
 
+const vitalValue = (s: GameState, k: VitalKey) => (k === 'hands' ? s.handTemp : k === 'feet' ? s.footTemp : s.stats[k]);
+
 /** Everyday actions that get a one-tap button; everything else lives under Options. */
-const QUICK = ['drink', 'eat', 'layer:up', 'layer:down', 'rest'];
+const QUICK = ['drink', 'eat', 'layer:up', 'layer:down', 'hands', 'rest'];
 
 const TONE_COLOR: Record<NonNullable<LogEntry['tone']>, string> = { good: C.good, bad: C.bad, info: C.ice };
 const GLASS = 'rgba(10,17,26,0.78)';
@@ -118,6 +127,11 @@ export function ClimbScreen({
   const lastCommit = useRef(0);
   const [walking, setWalking] = useState(false);
   const walkingRef = useRef(false);
+  const [pace, setPace] = useState<Pace | null>(null);
+  const paceRef = useRef<Pace | null>(null);
+  const [soundOn, setSoundOn] = useState(true);
+  useEffect(() => { loadSoundOn().then(setSoundOn); }, []);
+  useClimbAudio({ state, live, walking, pace, paused: !!skillRun, enabled: soundOn });
 
   useEffect(() => {
     if (!working.current) {
@@ -145,9 +159,11 @@ export function ClimbScreen({
       const x = autoRef.current ? 0 : stick.current.x;
       const push = Math.min(1, Math.hypot(x, y));
       let moving = false;
+      let stridePace: Pace | null = null;
       if (push > 0.12 && !base.ending && !base.pendingEvent) {
         const w = working.current ?? (working.current = clone(base));
         const pace: Pace = push < 0.45 ? 'rest' : push < 0.85 ? 'steady' : 'push';
+        stridePace = pace;
         const gameMinutes = (dt * TIME_SCALE) / 60;
         // Forward/back from the stick; a sideways-only push still edges you forward slowly.
         const along = Math.abs(y) > 0.12 ? Math.sign(y) : 0.3;
@@ -169,6 +185,11 @@ export function ClimbScreen({
       if (moving !== walkingRef.current) {
         walkingRef.current = moving;
         setWalking(moving);
+      }
+      const shownPace = moving ? stridePace : null;
+      if (shownPace !== paceRef.current) {
+        paceRef.current = shownPace;
+        setPace(shownPace);
       }
       raf = requestAnimationFrame(tick);
     };
@@ -202,6 +223,10 @@ export function ClimbScreen({
   const onTop = state.node === SUMMIT && state.dir === 'up';
   const blocked = onTop ? undefined : moveBlockedReason(state);
   const trend = warmthTrend(state);
+  const handTrend = partTrend(state, 'hands');
+  const footTrend = partTrend(state, 'feet');
+  const ox = has(state, 'oximeter') ? readPulseOx(state, pace) : null;
+  const partnerOx = ox ? readPartnerOx(state, pace) : null;
   const event = state.pendingEvent ? EVENT_BY_ID[state.pendingEvent] : null;
   const ending = state.ending ? ENDINGS[state.ending] : null;
 
@@ -222,6 +247,7 @@ export function ClimbScreen({
           facing={state.dir}
           live={live}
           paused={!!skillRun}
+          season={state.season}
         />
       </View>
       <View style={StyleSheet.absoluteFill} {...pan.panHandlers} />
@@ -234,22 +260,24 @@ export function ClimbScreen({
             <Text style={[styles.big, NUM]}>{formatFt(currentFt(state))}</Text>
           </View>
           <View style={[styles.chip, { alignItems: 'flex-end' }]} pointerEvents="none">
-            <Text style={[styles.place, NUM]}>DAY {dayOf(state.clock)} · {state.dir === 'up' ? 'ASCENT' : 'DESCENT'}</Text>
+            <Text style={[styles.place, NUM]}>{SEASONS[state.season].label.toUpperCase()} · DAY {dayOf(state.clock)} · {state.dir === 'up' ? 'UP' : 'DOWN'}</Text>
             <Text style={[styles.big, NUM]}>{formatClock(state.clock)}</Text>
           </View>
         </View>
 
         <View style={styles.vitals} pointerEvents="none">
           {VITALS.map(({ key, label, inverted }) => {
-            const v = state.stats[key];
+            const v = vitalValue(state, key);
             const color = statColor(v, inverted);
-            const arrow = key === 'warmth' && trend !== 'ok' ? (trend === 'cold' ? ' ↓' : ' ↑') : '';
+            const arrow = key === 'warmth' && trend !== 'ok' ? (trend === 'cold' ? ' ↓' : ' ↑')
+              : key === 'hands' && handTrend === 'cold' && v < 100 ? ' ↓'
+                : key === 'feet' && footTrend === 'cold' && v < 100 ? ' ↓' : '';
             return (
               <View key={key} style={styles.vital}>
                 <View style={styles.vitalTop}>
                   <Text style={styles.vitalLabel}>
                     {label}
-                    {arrow ? <Text style={{ color: trend === 'cold' ? C.ice : C.warn }}>{arrow}</Text> : null}
+                    {arrow ? <Text style={{ color: arrow === ' ↑' ? C.warn : C.ice }}>{arrow}</Text> : null}
                   </Text>
                   <Text style={[styles.vitalNum, NUM, { color }]}>{Math.round(v)}</Text>
                 </View>
@@ -261,10 +289,36 @@ export function ClimbScreen({
           })}
         </View>
 
+        {ox && partnerOx ? (
+          <View style={styles.oxRow} pointerEvents="none" accessibilityLabel={`Pulse oximeter: you ${ox.spo2} percent, heart rate ${ox.hr}. Partner ${partnerOx.spo2} percent, ${partnerOx.hr}.`}>
+            <Text style={styles.oxLabel}>SpO₂</Text>
+            <Text style={[styles.oxNum, NUM, { color: oxColor(oxConcern(ox.spo2, state, pace)) }]}>{ox.spo2}%</Text>
+            <Text style={[styles.oxSub, NUM]}>♥ {ox.hr}</Text>
+            <Text style={styles.oxLabel}>  PARTNER</Text>
+            <Text style={[styles.oxNum, NUM, { color: oxColor(oxConcern(partnerOx.spo2, state, pace)) }]}>{partnerOx.spo2}%</Text>
+            <Text style={[styles.oxSub, NUM]}>♥ {partnerOx.hr}</Text>
+          </View>
+        ) : null}
+
         <View style={styles.subRow} pointerEvents="box-none">
-          <Text style={[styles.weather, state.weather !== 'clear' && { color: C.warn }]} pointerEvents="none">
+          <Text style={[styles.weather, state.weather !== 'clear' && { color: C.warn }]} pointerEvents="none" numberOfLines={1}>
             {WEATHER_LABEL[state.weather]} · {LAYER_LABEL[state.layer]}
+            {state.wet > 30 ? <Text style={{ color: C.warn }}>{state.wet > 65 ? ' · soaked' : ' · damp'}</Text> : null}
           </Text>
+          <View style={{ flex: 1 }} />
+          <Pressable
+            style={styles.smallChip}
+            onPress={() => {
+              setSoundOn((on) => {
+                saveSoundOn(!on);
+                return !on;
+              });
+            }}
+            accessibilityRole="button"
+            accessibilityLabel={soundOn ? 'Mute sound' : 'Turn sound on'}
+          >
+            <Text style={styles.smallChipText}>{soundOn ? 'Sound on' : 'Muted'}</Text>
+          </Pressable>
           <Pressable
             style={styles.smallChip}
             onPress={() => {
@@ -344,8 +398,13 @@ export function ClimbScreen({
                 <Text style={styles.link}>Options{more.length ? ` (${more.length})` : ''}</Text>
               </Pressable>
               {next && !blocked ? (
-                <Pressable onPress={() => setAuto((a) => !a)} hitSlop={8} accessibilityRole="button">
-                  <Text style={[styles.link, auto && { color: C.accent }]}>{auto ? 'Stop auto-walk' : `Auto-walk to ${next}`}</Text>
+                <Pressable
+                  onPress={() => setAuto((a) => !a)}
+                  hitSlop={8}
+                  accessibilityRole="button"
+                  accessibilityLabel={auto ? 'Stop walking' : `Auto-walk to ${next}`}
+                >
+                  <Text style={[styles.link, auto && { color: C.accent }]}>{auto ? 'Stop walking' : 'Auto-walk'}</Text>
                 </Pressable>
               ) : null}
               <Pressable onPress={() => setSheet('notes')} hitSlop={8} accessibilityRole="button">
@@ -398,7 +457,8 @@ export function ClimbScreen({
           skill={skillRun.skill}
           title={event.title}
           slopeDeg={LEGS[legOf(state)].slopeDeg}
-          picket={has(state, 'picket')}
+          anchor={anchorStep(state)}
+          note={handicapNote(state, skillRun.skill)}
           onDone={(perf) => {
             const idx = skillRun.index;
             setSkillRun(null);
@@ -439,7 +499,12 @@ export function ClimbScreen({
 }
 
 function quickLabel(id: string) {
-  return { drink: 'Drink', eat: 'Eat', 'layer:up': 'Layer +', 'layer:down': 'Layer −', rest: 'Break' }[id] ?? id;
+  return { drink: 'Drink', eat: 'Eat', 'layer:up': 'Layer +', 'layer:down': 'Layer −', hands: 'Hands', rest: 'Break' }[id] ?? id;
+}
+
+/** A reading well under what's typical at this height is a red flag (see src/game/vitals.ts). */
+function oxColor(c: 'ok' | 'low' | 'very low') {
+  return c === 'very low' ? C.bad : c === 'low' ? C.warn : C.ice;
 }
 
 function quickDetail(id: string, s: GameState) {
@@ -448,6 +513,10 @@ function quickDetail(id: string, s: GameState) {
     case 'eat': return `${s.food} left`;
     case 'layer:up': return s.layer < 3 ? LAYER_LABEL[(s.layer + 1) as 0 | 1 | 2 | 3] : 'All on';
     case 'layer:down': return s.layer > 0 ? LAYER_LABEL[(s.layer - 1) as 0 | 1 | 2 | 3] : 'Base';
+    case 'hands': {
+      const o = handOuter(s);
+      return HAND_LABEL[o === 'mitts' ? 2 : o === 'gloves' ? 1 : 0];
+    }
     case 'rest': return '20 min';
     default: return '';
   }
@@ -467,13 +536,20 @@ const styles = StyleSheet.create({
     flexDirection: 'row', flexWrap: 'wrap', rowGap: 7, columnGap: 12, backgroundColor: GLASS, borderRadius: 12,
     paddingVertical: 9, paddingHorizontal: 11,
   },
-  vital: { width: '29%', flexGrow: 1 },
+  vital: { width: '21%', flexGrow: 1 },
   vitalTop: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'baseline', marginBottom: 3 },
   vitalLabel: { color: C.muted, fontSize: 10, fontWeight: '700', letterSpacing: 0.4 },
   vitalNum: { fontSize: 11, fontWeight: '800' },
   track: { height: 3, backgroundColor: 'rgba(255,255,255,0.12)', borderRadius: 2, overflow: 'hidden' },
   fill: { height: '100%', borderRadius: 2 },
-  subRow: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center' },
+  subRow: { flexDirection: 'row', alignItems: 'center', gap: 6 },
+  oxRow: {
+    flexDirection: 'row', alignItems: 'baseline', gap: 5, alignSelf: 'flex-start', backgroundColor: GLASS, borderRadius: 999,
+    paddingVertical: 4, paddingHorizontal: 11,
+  },
+  oxLabel: { color: C.muted, fontSize: 10, fontWeight: '800', letterSpacing: 0.6 },
+  oxNum: { fontSize: 13, fontWeight: '800' },
+  oxSub: { color: C.muted, fontSize: 11, fontWeight: '600' },
   weather: {
     color: C.good, fontSize: 11, fontWeight: '700', backgroundColor: GLASS, borderRadius: 999, overflow: 'hidden',
     paddingVertical: 4, paddingHorizontal: 10,
@@ -496,7 +572,7 @@ const styles = StyleSheet.create({
     flex: 1, backgroundColor: 'rgba(255,255,255,0.06)', borderRadius: 10, paddingVertical: 8, alignItems: 'center',
     borderWidth: 1, borderColor: 'rgba(255,255,255,0.07)',
   },
-  quickLabel: { color: C.text, fontSize: 13, fontWeight: '700' },
+  quickLabel: { color: C.text, fontSize: 12, fontWeight: '700' },
   quickDetail: { color: C.faint, fontSize: 10, marginTop: 1 },
   linkRow: { flexDirection: 'row', justifyContent: 'space-between', paddingHorizontal: 2, paddingTop: 2 },
   link: { color: C.ice, fontSize: 14, fontWeight: '600' },

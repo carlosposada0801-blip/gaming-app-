@@ -1,12 +1,15 @@
 import { FORECAST_TEXT, crampons, has, roped } from './helpers';
 import { DAY, MUIR, NODES, SUMMIT, isNight, minuteOfDay } from './route';
-import { arrestOdds, ladderOutcome, prusikOutcome, zpulleyOutcome } from './skills';
+import { anchorMinutes, arrestOdds, ladderOutcome, prusikOutcome, zpulleyOutcome } from './skills';
+import { SEASONS } from './season';
 import type { Choice, EventDef, GameState, Outcome, Rng, SkillId } from './types';
 
 const ft = (s: GameState) => NODES[s.node].ft;
 
 /** Rockfall roll shared by Cathedral Gap and the Cleaver. */
 function rockfall(s: GameState, p: number, rng: Rng, base: Outcome): Outcome {
+  // Less snow holding the rock in place late in the season, more in spring.
+  p *= SEASONS[s.season].rockfall;
   // Late in the day the sun loosens rock frozen in place overnight.
   if (s.flags.pushedPastTurnaround) p += 0.2;
   if (rng() >= p) return base;
@@ -41,6 +44,28 @@ function slide(s: GameState, rng: Rng, arrestOdds: number, soft = false): Outcom
     return { text: 'You slide 200 feet and stop in a soft runout. Bruised and scared.', delta: { stamina: -18, morale: -18 }, tone: 'bad' };
   }
   return { text: 'You can’t stop the slide.', ending: 'fall', tone: 'bad' };
+}
+
+/** Caught in a slide. A buried climber lives or dies by the transceiver, probe and shovel. */
+function caught(s: GameState, rng: Rng): Outcome {
+  if (has(s, 'avy')) {
+    return rng() < 0.8
+      ? {
+          text: 'The slope releases and sweeps you down, burying you to the chest. Your partner switches their transceiver to search, probes, and digs you out in minutes.',
+          delta: { stamina: -30, warmth: -25, morale: -30 },
+          turnBack: true,
+          tone: 'bad',
+        }
+      : { text: 'The slope releases and buries you deep.', ending: 'avalanche', tone: 'bad' };
+  }
+  return rng() < 0.35
+    ? {
+        text: 'The slope releases and tumbles you down. You come to rest with one arm out of the debris, and your partner digs you out by hand.',
+        delta: { stamina: -35, warmth: -30, morale: -35 },
+        turnBack: true,
+        tone: 'bad',
+      }
+    : { text: 'The slope releases and buries you. With no transceiver, nobody can find you in time.', ending: 'avalanche', tone: 'bad' };
 }
 
 const req = (cond: boolean, label: string, need: string, resolve: Choice['resolve'], skill?: SkillId): Choice => ({
@@ -156,7 +181,7 @@ export const EVENTS: EventDef[] = [
   {
     id: 'glare',
     title: 'Glare on the snowfield',
-    chance: (s, c) => (c.dir === 'up' && c.leg <= 1 && !isNight(c.start) && s.weather === 'clear' && !has(s, 'glasses') ? 0.85 : 0),
+    chance: (s, c) => (c.dir === 'up' && c.leg <= 1 && !isNight(c.start, s.season) && s.weather === 'clear' && !has(s, 'glasses') ? 0.85 : 0),
     text: () =>
       'The sun is blazing off the Muir Snowfield. Snow reflects most of the UV that hits it, and you have no glacier glasses on.',
     choices: (s) => [
@@ -178,7 +203,7 @@ export const EVENTS: EventDef[] = [
   {
     id: 'sunburn',
     title: 'Sunburn',
-    chance: (s, c) => (c.dir === 'up' && c.leg <= 1 && !isNight(c.start) && s.weather === 'clear' && !has(s, 'sun') ? 0.7 : 0),
+    chance: (s, c) => (c.dir === 'up' && c.leg <= 1 && !isNight(c.start, s.season) && s.weather === 'clear' && !has(s, 'sun') ? 0.7 : 0),
     text: () => 'No sunscreen. The light bouncing off the snow burns under your chin, inside your nostrils, and on your lips.',
     choices: () => [
       { label: 'Pull up your hood and keep going', resolve: () => ({ text: 'Your face is raw and blistering by Camp Muir.', delta: { morale: -8, hydration: -5 }, mutate: (st) => { st.flags.sunburn = true; }, tone: 'bad' }) },
@@ -231,7 +256,7 @@ export const EVENTS: EventDef[] = [
   {
     id: 'glissade',
     title: 'Glissade chutes',
-    chance: (s, c) => (c.dir === 'down' && c.leg === 1 && s.weather !== 'whiteout' ? 0.75 : 0),
+    chance: (s, c) => (c.dir === 'down' && c.leg === 1 && s.weather !== 'whiteout' ? SEASONS[s.season].glissade : 0),
     text: () => 'Glissade chutes run down the Muir Snowfield. Sliding on your butt is fast and fun, and it saves your knees.',
     choices: (s) => [
       req(has(s, 'axe'), 'Crampons off, glissade with your axe ready', 'an ice axe', () => ({ text: 'Whoosh. You drop a thousand feet in minutes.', minutes: -40, delta: { morale: 10 }, tone: 'good' })),
@@ -275,7 +300,8 @@ export const EVENTS: EventDef[] = [
   {
     id: 'rockfall_gap',
     title: 'Rockfall',
-    chance: (s, c) => (c.leg === 2 ? (c.dir === 'up' ? 0.5 : 0.65) : c.leg === 3 && c.dir === 'down' ? 0.6 : 0),
+    chance: (s, c) => Math.min(0.95, SEASONS[s.season].rockfall
+      * (c.leg === 2 ? (c.dir === 'up' ? 0.5 : 0.65) : c.leg === 3 && c.dir === 'down' ? 0.6 : 0)),
     text: (s) =>
       `“ROCK!” A rock the size of a microwave comes bouncing down ${s.node <= 3 && s.dir === 'up' ? 'Cathedral Gap' : 'the gully'} toward your rope team.`,
     choices: () => [
@@ -288,7 +314,8 @@ export const EVENTS: EventDef[] = [
     title: 'Crevasse fall',
     chance: (s, c) =>
       [2, 4, 5].includes(c.leg)
-        ? 0.12 + (c.dir === 'down' && minuteOfDay(s.clock) > 660 ? 0.15 : 0) + (s.flags.pushedPastTurnaround ? 0.2 : 0)
+        ? (0.12 + (c.dir === 'down' && minuteOfDay(s.clock) > 660 ? 0.15 : 0) + (s.flags.pushedPastTurnaround ? 0.2 : 0))
+          * SEASONS[s.season].crevasse
           // Leaving the boot track means stepping on untested snow bridges.
           + Math.min(0.35, (c.offTrack ?? 0) / 400)
         : 0,
@@ -303,10 +330,12 @@ export const EVENTS: EventDef[] = [
               text: 'Foot loop, waist loop, slide, stand. Twenty minutes of work and you flop over the lip.', minutes: 40, delta: { stamina: -15, warmth: -8 }, tone: 'good',
             } : prusikOutcome(perf)), 'prusik'),
             req(has(s, 'rescue_kit'), 'Your partner builds a Z-pulley and hauls', 'a crevasse rescue kit', (st, _rng, perf) => (perf === undefined ? {
-              text: has(st, 'picket')
-                ? 'A buried picket for the anchor, a 3:1 haul, and you’re out.'
-                : 'With no picket, your partner builds an anchor from an ice axe. Slow, but it holds.',
-              minutes: has(st, 'picket') ? 50 : 75,
+              text: anchorMinutes(st) <= 50
+                ? `${st.season === 'september' ? 'Two ice screws in the hard ice' : 'A buried picket'} for the anchor, a 3:1 haul, and you’re out.`
+                : st.season === 'september' && has(st, 'picket')
+                  ? 'The picket won’t go into the hard ice, so your partner chops a slot and buries it sideways. Slow, but it holds.'
+                  : 'With no picket, your partner builds an anchor from an ice axe. Slow, but it holds.',
+              minutes: anchorMinutes(st),
               delta: { stamina: -6, warmth: -18 },
               tone: 'good',
             } : zpulleyOutcome(st, perf)), 'zpulley'),
@@ -328,7 +357,7 @@ export const EVENTS: EventDef[] = [
   {
     id: 'ladder',
     title: 'Ladder crossing',
-    chance: (_s, c) => (c.dir === 'up' && c.leg === 4 ? 0.35 : 0),
+    chance: (s, c) => (c.dir === 'up' && c.leg === 4 ? SEASONS[s.season].ladder : 0),
     text: () => 'Late-season crevasses force the route across aluminum ladders lashed together over a gap, with hand lines fixed on both sides.',
     choices: (s) => [
       req(has(s, 'harness'), 'Clip into the hand line and walk the rungs', 'a harness', (_st, _rng, perf) => (perf === undefined
@@ -349,6 +378,7 @@ export const EVENTS: EventDef[] = [
       if (s.flags.cramponsDull) p += 0.2;
       if (!crampons(s)) p += 0.3;
       if (!has(s, 'gaiters')) p += 0.08;
+      if (SEASONS[s.season].hardIce) p += 0.08;
       return p;
     },
     text: (s) =>
@@ -357,8 +387,47 @@ export const EVENTS: EventDef[] = [
         : 'A crampon point snags your loose pant leg and you pitch forward, sliding headfirst.',
     choices: (s) => [
       req(has(s, 'axe'), 'Self-arrest with your ice axe', 'an ice axe',
-        (st, rng, perf) => slide(st, rng, perf === undefined ? (st.flags.cramponsDull ? 0.75 : 0.88) : arrestOdds(st, perf)), 'arrest'),
+        (st, rng, perf) => slide(st, rng, perf === undefined
+          ? (st.flags.cramponsDull ? 0.75 : 0.88) - (SEASONS[st.season].hardIce ? 0.1 : 0)
+          : arrestOdds(st, perf)), 'arrest'),
       { label: 'Dig in your hands and heels', resolve: (st, rng) => slide({ ...st, packed: st.packed.filter((g) => g !== 'axe') }, rng, 0) },
+    ],
+  },
+  {
+    id: 'avalanche',
+    title: 'Whumpf',
+    chance: (s, c) => {
+      const base = SEASONS[s.season].avalanche;
+      if (!base || c.dir !== 'up' || c.leg < 1 || c.leg > 5) return 0;
+      let p = base * (c.leg === 1 ? 0.5 : 1);
+      // New snow and wind load slopes; spring sun weakens them by late morning.
+      if (s.weather === 'storm' || s.weather === 'coldsnap' || s.forecast === 'incoming') p *= 1.6;
+      if (minuteOfDay(s.clock) > 660 && !isNight(s.clock, s.season)) p *= 1.5;
+      return Math.min(0.5, p);
+    },
+    text: () =>
+      'The slope settles under your boots with a deep “whumpf,” and a crack shoots out ahead of you. A slab of new snow is sitting on a weak layer, and the route crosses it above a long drop.',
+    choices: (s) => [
+      req(has(s, 'avy'), 'Dig a pit and test the snow', 'a shovel (avalanche kit)', (st, rng) => (rng() < 0.55
+        ? {
+            text: 'The column breaks clean under light taps: the slab is ready to go. You turn around.',
+            minutes: 40,
+            delta: { morale: -6, warmth: -6 },
+            turnBack: true,
+            mutate: (x) => { x.flags.goodCall = true; },
+            tone: 'good',
+          }
+        : rng() < 0.06
+          ? caught(st, rng)
+          : { text: 'The weak layer takes hard hits to break. You cross one at a time, well spaced, and it holds.', minutes: 40, delta: { warmth: -6 }, tone: 'good' })),
+      {
+        label: 'Cross one at a time, fast',
+        resolve: (st, rng) => (rng() < 0.22 ? caught(st, rng) : { text: 'One at a time, holding your breath. It holds.', minutes: 10, delta: { morale: -4 }, tone: 'info' }),
+      },
+      {
+        label: 'Turn back',
+        resolve: () => ({ text: 'You back off the slope the way you came. The mountain isn’t going anywhere.', turnBack: true, delta: { morale: -6 }, mutate: (x) => { x.flags.goodCall = true; }, tone: 'good' }),
+      },
     ],
   },
   {
@@ -387,17 +456,23 @@ export const EVENTS: EventDef[] = [
       {
         label: 'Put on everything: parka, mittens, goggles',
         resolve: (st) => {
+          const face = has(st, 'goggles') || has(st, 'balaclava');
           const missing = [
             !has(st, 'parka') && 'parka',
             !has(st, 'mitts') && 'mittens',
-            !has(st, 'goggles') && !has(st, 'balaclava') && 'face protection',
+            !face && 'face protection',
           ].filter(Boolean) as string[];
-          if (!missing.length) return { text: 'Fully bundled, you’re warm enough to keep moving.', minutes: 5, mutate: (x) => { x.layer = 3; }, tone: 'good' };
+          const bundle = (x: GameState) => { x.layer = 3; x.hands = 2; };
+          if (!missing.length) return { text: 'Fully bundled, you’re warm enough to keep moving.', minutes: 5, mutate: bundle, tone: 'good' };
           return {
-            text: `No ${missing.join(' or ')}. Your fingers and cheeks go white and waxy: frostnip.`,
+            text: `No ${missing.join(' or ')}. ${!face ? 'Your cheeks go white and waxy: frostnip. ' : ''}${!has(st, 'mitts') ? 'Your fingers ache, then go quiet.' : 'The wind cuts through.'}`,
             minutes: 5,
             delta: { warmth: -15, morale: -10 },
-            mutate: (x) => { x.layer = 3; x.flags.frostnip = true; },
+            mutate: (x) => {
+              bundle(x);
+              if (!face) x.flags.frostnip = true;
+              if (!has(x, 'mitts')) x.handTemp -= 30;
+            },
             tone: 'bad',
           };
         },
@@ -423,16 +498,31 @@ export const EVENTS: EventDef[] = [
   {
     id: 'cold_hands',
     title: 'Numb fingers',
-    chance: (s) => (isNight(s.clock) && ft(s) >= 10000 && !has(s, 'gloves') && !has(s, 'mitts') ? 0.8 : 0),
-    text: () => 'In the dark, your fingers go numb and white around the shaft of your ice axe. Liner gloves aren’t enough up here.',
-    choices: () => [
-      { label: 'Shove your hands in your armpits', hint: '10 min', resolve: () => ({ text: 'Painful pins and needles as they rewarm. Frostnip.', minutes: 10, delta: { warmth: -6, morale: -10 }, mutate: (x) => { x.flags.frostnip = true; }, tone: 'bad' }) },
+    chance: (s) => (s.handTemp < 40 && !s.flags.frostbiteHands ? 0.9 : 0),
+    text: (s) =>
+      `Your fingers are numb and white around the shaft of your ice axe.${ft(s) >= 10000 && !has(s, 'gloves') && !has(s, 'mitts') ? ' Liner gloves aren’t enough up here.' : ''} Numb hands drop things and can’t tie knots.`,
+    choices: (s) => [
+      req(has(s, 'mitts'), 'Pull on your mittens', 'mittens', () => ({
+        text: 'Mittens on. Slowly, painfully, the feeling comes back.',
+        minutes: 3,
+        mutate: (x) => { x.hands = 2; x.handTemp += 15; },
+        tone: 'good',
+      })),
+      {
+        label: 'Stop and rewarm them in your armpits',
+        hint: '15 min',
+        resolve: () => ({ text: 'Painful pins and needles as they rewarm.', minutes: 15, delta: { morale: -4 }, mutate: (x) => { x.handTemp += 35; }, tone: 'info' }),
+      },
+      {
+        label: 'Swing your arms and keep going',
+        resolve: () => ({ text: 'Windmilling your arms forces some blood back into your fingers.', delta: { stamina: -3 }, mutate: (x) => { x.handTemp += 12; }, tone: 'info' }),
+      },
     ],
   },
   {
     id: 'headlamp',
     title: 'Light out',
-    chance: (s, c) => (isNight(c.start) && has(s, 'headlamp') ? 0.12 : 0),
+    chance: (s, c) => (isNight(c.start, s.season) && has(s, 'headlamp') ? 0.12 : 0),
     text: () => 'Your headlamp dims to orange and dies. Cold drains batteries fast.',
     choices: () => [{ label: 'Swap in the spare batteries', resolve: () => ({ text: 'Fresh batteries, bright light.', minutes: 5, tone: 'info' }) }],
   },
@@ -441,7 +531,8 @@ export const EVENTS: EventDef[] = [
     title: 'Sunrise',
     chance: (s) => {
       const m = minuteOfDay(s.clock);
-      return s.dir === 'up' && s.clock >= DAY && m >= 330 && m <= 480 && (s.weather === 'clear' || s.weather === 'windy') ? 1 : 0;
+      const dawn = SEASONS[s.season].dawn;
+      return s.dir === 'up' && s.clock >= DAY && m >= dawn && m <= dawn + 150 && (s.weather === 'clear' || s.weather === 'windy') ? 1 : 0;
     },
     text: () =>
       'The sun comes up over the Cascades. Mount Adams and Mount Hood catch the first light, and Rainier’s shadow stretches west across the clouds.',

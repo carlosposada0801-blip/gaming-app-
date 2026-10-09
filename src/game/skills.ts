@@ -20,6 +20,8 @@ export function arrestOdds(s: GameState, perf: number) {
   p -= Math.max(0, slope - 28) * 0.012;
   if (s.flags.cramponsDull) p -= 0.08;
   if (!crampons(s)) p -= 0.05;
+  // Self-arrest on hard, bare ice often fails: the pick skates instead of biting.
+  if (s.season === 'september') p -= 0.1;
   return Math.max(0.02, Math.min(0.97, p));
 }
 
@@ -44,13 +46,23 @@ export function prusikOutcome(perf: number): Outcome {
   };
 }
 
+/**
+ * Minutes to build the anchor and haul at a normal standard. A picket is quick in snow. Late in the
+ * season the glacier is hard ice where a picket won't drive in; ice screws are quick there.
+ */
+export function anchorMinutes(s: GameState) {
+  if (s.season === 'september') return has(s, 'screws') ? 50 : has(s, 'picket') ? 65 : 75;
+  return has(s, 'picket') ? 50 : 75;
+}
+
 /** Helping your partner build a 3:1 Z-pulley: rigging in the right order, then hauling together. */
 export function zpulleyOutcome(s: GameState, perf: number): Outcome {
-  const base = has(s, 'picket') ? 50 : 75;
+  const base = anchorMinutes(s);
+  const anchor = s.season === 'september' && has(s, 'screws') ? 'Screws in the ice' : has(s, 'picket') ? 'Picket buried' : 'An axe anchor';
   const slack = 1 - perf;
   return {
     text: perf > 0.75
-      ? (has(s, 'picket') ? 'Picket buried, prusik on, pulley clipped. Three clean hauls and you’re out.' : 'An axe anchor, a prusik, a pulley. Smooth hauls, and you’re out.')
+      ? `${anchor}, prusik on, pulley clipped. Clean hauls, and you’re out.`
       : 'The system slips twice before it holds. Slow, cold work, but you’re out.',
     minutes: Math.round(base * (0.75 + slack * 0.7)),
     delta: { stamina: -Math.round(5 + slack * 6), warmth: -Math.round(10 + slack * 16), morale: perf > 0.75 ? 4 : -6 },
@@ -74,4 +86,11 @@ export function ladderOutcome(perf: number): Outcome {
     delta: { morale: Math.round(5 - (1 - perf) * 8) },
     tone: 'good',
   };
+}
+
+/** The first rigging step of a Z-pulley, by the anchor you can build here. */
+export function anchorStep(s: GameState) {
+  if (s.season === 'september' && has(s, 'screws')) return 'Twist two ice screws into the hard ice';
+  if (has(s, 'picket')) return s.season === 'september' ? 'Chop a slot in the ice and bury the picket sideways' : 'Bury a picket as the anchor';
+  return 'Bury an ice axe as the anchor';
 }

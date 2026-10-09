@@ -58,6 +58,10 @@ export function TitleScreen({ best, onStart }: { best: Best | null; onStart: () 
         >
           <Text style={styles.startText}>Pack your gear</Text>
         </Pressable>
+        <Text style={styles.credits}>
+          Terrain: USGS 3DEP elevation via AWS Terrain Tiles. Sound effects synthesized for this game; rope-team calls
+          use your phone's built-in voice.
+        </Text>
       </View>
     </View>
   );
@@ -80,4 +84,5 @@ const styles = StyleSheet.create({
   best: { color: C.muted, fontSize: 13 },
   start: { backgroundColor: C.accent, borderRadius: 12, paddingVertical: 16, alignItems: 'center' },
   startText: { color: '#1a0b03', fontSize: 17, fontWeight: '800' },
+  credits: { color: C.faint, fontSize: 10, lineHeight: 14 },
 });

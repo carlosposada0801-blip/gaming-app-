@@ -1,4 +1,5 @@
 // Gear catalog. Weights are typical real-world weights in ounces.
+import { SEASONS, type Season } from './season';
 // "layer" decides when a clothing item counts toward warmth:
 //   0 = always worn, 1 = midlayer setting and up, 2 = shell setting and up, 3 = full kit.
 
@@ -25,24 +26,30 @@ export interface Gear {
   layer?: 0 | 1 | 2 | 3;
   /** Left behind at Camp Muir for summit day. */
   camp?: boolean;
+  /** Hand wear: worn from this hand setting up (0 liners, 1 gloves, 2 mittens). */
+  hand?: 0 | 1 | 2;
+  /** How well this keeps your toes warm (boots, gaiters). Game scale, not a lab number. */
+  feet?: number;
 }
 
 export const PACK_OZ = 72; // 65 L alpine pack itself
 
 export const GEAR: Gear[] = [
   // Footwear
-  { id: 'boots_single', name: 'Insulated single boots (B3)', cat: 'Footwear', oz: 66, group: 'boots', warmth: 0.7, layer: 0, recommended: true,
+  { id: 'boots_single', name: 'Insulated single boots (B3)', cat: 'Footwear', oz: 66, group: 'boots', warmth: 0.7, layer: 0, feet: 1.6, recommended: true,
     note: 'Stiff soles with toe and heel welts for automatic crampons. The standard summer Rainier boot.' },
-  { id: 'boots_double', name: 'Double mountaineering boots', cat: 'Footwear', oz: 92, group: 'boots', warmth: 1.2, layer: 0, recommended: false,
-    note: 'Removable insulated liner. Warmest and heaviest. Overkill in July, smart in a cold snap.' },
-  { id: 'boots_hiking', name: 'Waterproof hiking boots', cat: 'Footwear', oz: 40, group: 'boots', warmth: 0.2, layer: 0, recommended: false,
-    note: 'Light and comfy, but the soles flex, strap-on crampons loosen, and your toes go numb above Muir.' },
+  { id: 'boots_double', name: 'Double mountaineering boots', cat: 'Footwear', oz: 92, group: 'boots', warmth: 1.2, layer: 0, feet: 2.6, recommended: false,
+    note: 'Removable insulated liner. Warmest and heaviest. Overkill in July, smart in a cold snap or a cold spring.' },
+  { id: 'boots_hiking', name: 'Waterproof hiking boots', cat: 'Footwear', oz: 40, group: 'boots', warmth: 0.2, layer: 0, feet: 0.45, recommended: false,
+    note: 'Light and comfy, but the soles flex, strap-on crampons loosen, and they soak through in snow. Toes go numb above Muir.' },
   { id: 'crampons_steel', name: 'Steel 12-point crampons', cat: 'Footwear', oz: 36, group: 'crampons', recommended: true,
     note: 'Front points bite on hard morning ice and survive walking on the Cleaver’s rock.' },
   { id: 'crampons_alu', name: 'Aluminum crampons', cat: 'Footwear', oz: 20, group: 'crampons', recommended: false,
     note: 'Light. Fine on soft snow, but rock dulls them fast and they skate on hard ice.' },
-  { id: 'gaiters', name: 'Gaiters', cat: 'Footwear', oz: 10, recommended: true,
+  { id: 'gaiters', name: 'Gaiters', cat: 'Footwear', oz: 10, feet: 0.25, recommended: true,
     note: 'Keep snow out of your boots and stop crampon points from snagging your pant legs.' },
+  { id: 'snowshoes', name: 'Snowshoes', cat: 'Footwear', oz: 66, camp: true, recommended: false,
+    note: 'Float on soft spring snow instead of post-holing to your knees. Left at Camp Muir for summit day.' },
 
   // Climbing
   { id: 'axe', name: 'Mountaineering ice axe, 65 cm', cat: 'Climbing', oz: 17, recommended: true,
@@ -61,8 +68,10 @@ export const GEAR: Gear[] = [
     note: 'Three locking carabiners, two prusik loops, a micro pulley, and a cordelette.' },
   { id: 'picket', name: 'Snow picket', cat: 'Glacier travel', oz: 16, recommended: true,
     note: 'Aluminum stake for anchors in snow. Speeds up a Z-pulley rescue.' },
+  { id: 'screws', name: 'Ice screws (2)', cat: 'Glacier travel', oz: 10, recommended: false,
+    note: 'For anchors in hard glacier ice, where a picket won’t hold. Late-season glaciers are bare ice in places.' },
   { id: 'avy', name: 'Avalanche transceiver, probe & shovel', cat: 'Glacier travel', oz: 70, recommended: false,
-    note: 'Standard kit in winter and spring. Mostly dead weight on a summer Cleaver climb.' },
+    note: 'Standard kit on spring snow. Most summer Cleaver parties leave it home: about 4.4 lb.' },
 
   // Clothing
   { id: 'base', name: 'Synthetic base layer (top & bottom)', cat: 'Clothing', oz: 12, warmth: 1, layer: 0, recommended: true,
@@ -79,12 +88,12 @@ export const GEAR: Gear[] = [
     note: 'The "belay jacket". Throw it on at every break and on the summit.' },
 
   // Hands, head & eyes
-  { id: 'liners', name: 'Liner gloves', cat: 'Hands, head & eyes', oz: 2, warmth: 0.3, layer: 0, recommended: true,
+  { id: 'liners', name: 'Liner gloves', cat: 'Hands, head & eyes', oz: 2, warmth: 0.3, hand: 0, recommended: true,
     note: 'Thin gloves for the warm hike to Muir and fiddly rope work.' },
-  { id: 'gloves', name: 'Insulated gloves', cat: 'Hands, head & eyes', oz: 7, warmth: 0.6, layer: 2, recommended: true,
-    note: 'Your main glove above Camp Muir.' },
-  { id: 'mitts', name: 'Expedition mittens', cat: 'Hands, head & eyes', oz: 10, warmth: 1.1, layer: 3, recommended: true,
-    note: 'Fingers together stay warm. For wind on the upper mountain.' },
+  { id: 'gloves', name: 'Insulated gloves', cat: 'Hands, head & eyes', oz: 7, warmth: 0.6, hand: 1, recommended: true,
+    note: 'Your main glove above Camp Muir. Warm enough for most nights, nimble enough for rope work.' },
+  { id: 'mitts', name: 'Expedition mittens', cat: 'Hands, head & eyes', oz: 10, warmth: 1.1, hand: 2, recommended: true,
+    note: 'Fingers together stay warm. For wind on the upper mountain. Clumsy for knots and prusiks.' },
   { id: 'balaclava', name: 'Balaclava & warm hat', cat: 'Hands, head & eyes', oz: 4, warmth: 0.5, layer: 3, recommended: true,
     note: 'Covers your face when the wind chill drops well below zero.' },
   { id: 'glasses', name: 'Glacier glasses (category 4)', cat: 'Hands, head & eyes', oz: 2, recommended: true,
@@ -101,6 +110,8 @@ export const GEAR: Gear[] = [
     note: 'The fastest way back down the Muir Snowfield in a whiteout.' },
   { id: 'wands', name: 'Wands (bundle of 20)', cat: 'Navigation', oz: 16, recommended: false,
     note: 'Bamboo stakes with flags. Place them on the way up to follow them down.' },
+  { id: 'oximeter', name: 'Pulse oximeter', cat: 'Navigation', oz: 2, recommended: false,
+    note: 'Clips on a fingertip and reads blood oxygen (SpO₂) and heart rate, for you and your partner. A clue, not a diagnosis.' },
   { id: 'plb', name: 'Personal locator beacon', cat: 'Navigation', oz: 4, recommended: true,
     note: 'Sends your location to rescuers by satellite.' },
 
@@ -133,7 +144,13 @@ export const CATEGORIES: GearCategory[] = [
   'Footwear', 'Climbing', 'Glacier travel', 'Clothing', 'Hands, head & eyes', 'Navigation', 'Essentials', 'Camp (left at Muir)',
 ];
 
+/** The summer (July) guide's list. */
 export const RECOMMENDED = GEAR.filter((g) => g.recommended).map((g) => g.id);
+
+/** A guide's list for the season: the summer list plus seasonal extras. */
+export function recommendedFor(season: Season): string[] {
+  return [...RECOMMENDED, ...SEASONS[season].extraGear];
+}
 
 export function packWeightLb(ids: string[], leftCampGear = false): number {
   const oz = ids.reduce((sum, id) => {
