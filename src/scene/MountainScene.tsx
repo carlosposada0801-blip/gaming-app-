@@ -5,11 +5,11 @@ import { Climber, type ClimberLook, type Motion } from './Climber';
 import { crevasseGeometry, rockGeometry, scatter, seracGeometry, treeGeometry, type Instances } from './features';
 import {
   CORE_MESH, FAR, HORIZON, PATCH_HALF, ROUTE, ROUTE_SPACING, SUMMIT_POS, buildPatch, currentPatch, earthDrop, groundColor,
-  inside, nodePosition, slopeAt, snowCover, surfaceAt, type Grid, type Vec3,
+  inside, nodePosition, routeIndexAt, slopeAt, snowCover, surfaceAt, type Grid, type Vec3,
 } from './terrain';
 import { cloudTexture, detailTextures, grassTexture } from './textures';
 import { flowerGeometry, grassGeometry, meadowScatter, swaying, tickWind } from './vegetation';
-import { minuteOfDay } from '../game/route';
+import { ALPINE_START, LEGS, MUIR, SUMMIT as SUMMIT_NODE, minuteOfDay } from '../game/route';
 import type { Weather } from '../game/types';
 
 export interface CameraControl {
@@ -33,6 +33,17 @@ export interface SceneProps {
   viewShift?: number;
   /** Which way the party is heading, so the camera looks along the next stretch when stopped. */
   facing?: 'up' | 'down';
+  /** Live position from the thumbstick, updated every frame without re-rendering. */
+  live?: React.MutableRefObject<LiveMove>;
+}
+
+export interface LiveMove {
+  /** Meters along the route. */
+  dist: number;
+  /** Meters off the boot track (+ = right when facing uphill). */
+  lateral: number;
+  /** Route meters per real second right now (0 when standing). */
+  speed: number;
 }
 
 /** Wand models are built about 1 unit tall; real wands stand about 1.7 m. */
@@ -416,6 +427,141 @@ function ParadiseInn({ at }: { at: Vec3 }) {
   );
 }
 
+// ---------- other rope teams ----------
+
+/**
+ * Parties leaving Camp Muir on summit day, minutes relative to our 12:30 AM alpine start.
+ * On a busy July night teams leave between about 11 PM and 2 AM; this spread is representative.
+ */
+const TEAM_STARTS = [-55, -30, 25, 50, 80];
+const TEAM_SIZE = 3;
+const TEAM_GAP_M = 9;
+
+/** Where a team is (meters along the route) at a given clock, or null when off the route. */
+function teamDist(clock: number, start: number) {
+  const nodeD = (k: number) => {
+    const i = ROUTE.nodeIndex[k];
+    return ROUTE_CUM_LOCAL[i];
+  };
+  let t = clock - (ALPINE_START + start);
+  if (t < -40) return null; // still in the hut
+  if (t < 0) return nodeD(MUIR) + 15; // gearing up outside the shelter
+  // Up at standard pace, 20 minutes on top, down at half the time.
+  for (let k = MUIR; k < SUMMIT_NODE; k++) {
+    const m = LEGS[k].minutes;
+    if (t < m) return nodeD(k) + (nodeD(k + 1) - nodeD(k)) * (t / m);
+    t -= m;
+  }
+  if (t < 20) return nodeD(SUMMIT_NODE);
+  t -= 20;
+  for (let k = SUMMIT_NODE; k > MUIR; k--) {
+    const m = LEGS[k - 1].minutes * 0.5;
+    if (t < m) return nodeD(k) - (nodeD(k) - nodeD(k - 1)) * (t / m);
+    t -= m;
+  }
+  return null; // back at Muir
+}
+
+const ROUTE_CUM_LOCAL: number[] = (() => {
+  const out = [0];
+  for (let i = 1; i < ROUTE.pts.length; i++) {
+    out.push(out[i - 1] + Math.hypot(ROUTE.pts[i][0] - ROUTE.pts[i - 1][0], ROUTE.pts[i][2] - ROUTE.pts[i - 1][2]));
+  }
+  return out;
+})();
+
+function glowTexture() {
+  const n = 64;
+  const data = new Uint8Array(n * n * 4);
+  for (let y = 0; y < n; y++) {
+    for (let x = 0; x < n; x++) {
+      const d = Math.hypot(x - n / 2 + 0.5, y - n / 2 + 0.5) / (n / 2);
+      const a = Math.max(0, 1 - d);
+      const i = (y * n + x) * 4;
+      data[i] = 255;
+      data[i + 1] = 244;
+      data[i + 2] = 214;
+      data[i + 3] = Math.round(Math.pow(a, 2.2) * 255);
+    }
+  }
+  const t = new THREE.DataTexture(data, n, n, THREE.RGBAFormat, THREE.UnsignedByteType);
+  t.magFilter = THREE.LinearFilter;
+  t.needsUpdate = true;
+  return t;
+}
+
+/** Other parties on the route: small figures by day, a string of headlamps by night. */
+function OtherTeams({ clock, night, player }: {
+  clock: number;
+  night: React.MutableRefObject<number>;
+  player: React.MutableRefObject<THREE.Vector3>;
+}) {
+  const count = TEAM_STARTS.length * TEAM_SIZE;
+  const { bodies, lamps } = useMemo(() => {
+    // Distant figures: a slim silhouette is all you see of another party.
+    const geo = new THREE.CapsuleGeometry(0.19, 1.3, 4, 8);
+    geo.translate(0, 0.86, 0);
+    const bodies = new THREE.InstancedMesh(geo, new THREE.MeshStandardMaterial({ roughness: 0.8 }), count);
+    const palette = ['#8e2a24', '#24456e', '#9a6c1a', '#2d4f3d', '#3a3f4a'];
+    for (let i = 0; i < count; i++) bodies.setColorAt(i, new THREE.Color(palette[i % palette.length]));
+    bodies.frustumCulled = false;
+    const tex = glowTexture();
+    const lamps = Array.from({ length: count }, () => {
+      const s = new THREE.Sprite(new THREE.SpriteMaterial({
+        map: tex, color: '#fff3d6', transparent: true, depthWrite: false, blending: THREE.AdditiveBlending,
+        sizeAttenuation: false, fog: false,
+      }));
+      s.scale.setScalar(0.022);
+      return s;
+    });
+    return { bodies, lamps };
+  }, [count]);
+  const m = useMemo(() => new THREE.Matrix4(), []);
+  const latest = useRef(clock);
+  latest.current = clock;
+
+  useFrame(() => {
+    const lit = night.current > 0.35;
+    let k = 0;
+    TEAM_STARTS.forEach((start) => {
+      const lead = teamDist(latest.current, start);
+      for (let j = 0; j < TEAM_SIZE; j++, k++) {
+        const lamp = lamps[k];
+        if (lead === null) {
+          m.makeScale(0, 0, 0);
+          bodies.setMatrixAt(k, m);
+          lamp.visible = false;
+          continue;
+        }
+        const d = lead - j * TEAM_GAP_M;
+        const f = Math.max(0, routeIndexAt(d));
+        const i = Math.floor(f);
+        const a = ROUTE.pts[i];
+        const b = ROUTE.pts[Math.min(ROUTE.pts.length - 1, i + 1)];
+        const t = f - i;
+        const x = a[0] + (b[0] - a[0]) * t + (j - 1) * 0.4;
+        const z = a[2] + (b[2] - a[2]) * t;
+        const y = surfaceAt(x, z);
+        // Don't stand inside the player's own party.
+        const tooClose = Math.hypot(x - player.current.x, z - player.current.z) < 22;
+        m.makeTranslation(x, y, z);
+        if (tooClose) m.makeScale(0, 0, 0);
+        bodies.setMatrixAt(k, m);
+        lamp.visible = lit && !tooClose;
+        lamp.position.set(x, y + 1.75, z);
+      }
+    });
+    bodies.instanceMatrix.needsUpdate = true;
+  });
+
+  return (
+    <>
+      <primitive object={bodies} />
+      {lamps.map((l, i) => <primitive key={i} object={l} />)}
+    </>
+  );
+}
+
 // ---------- night sky ----------
 
 function Stars({ night }: { night: React.MutableRefObject<number> }) {
@@ -597,6 +743,9 @@ function World(props: SceneProps) {
   const pos = useRef(ROUTE.nodeIndex[props.node]);
   const speed = useRef(0.15);
   const snapCamera = useRef(true);
+  const lateral = useRef(0);
+  const moveSign = useRef(1);
+  const playerPos = useRef(new THREE.Vector3());
   const lastTarget = useRef(ROUTE.nodeIndex[props.node]);
   const heading = useRef(0);
   const camTarget = useRef(new THREE.Vector3(...nodePosition(props.node)));
@@ -653,12 +802,21 @@ function World(props: SceneProps) {
     const dt = Math.min(rawDt, 0.1);
     tickWind(st.clock.elapsedTime);
     const p = latest.current;
-    const target = ROUTE.nodeIndex[p.node];
+    const live = follow ? p.live?.current : undefined;
+    const target = live ? routeIndexAt(live.dist) : ROUTE.nodeIndex[p.node];
 
-    // --- move along the route ---
+    if (live) {
+      // Thumbstick: follow the live position closely; jump if it moved far (e.g. a new climb).
+      const gap = target - pos.current;
+      pos.current = Math.abs(gap) > 60 ? target : pos.current + gap * Math.min(1, dt * 12);
+      if (Math.abs(gap) > 60) snapCamera.current = true;
+      lastTarget.current = target;
+      lateral.current += (live.lateral - lateral.current) * Math.min(1, dt * 6);
+    }
+    // --- move along the route (title screen / no thumbstick) ---
     // A leg takes hours, so the screen cuts ahead (the climb screen fades) and you rejoin the
     // party a short way below the next stop, walking in at a real uphill pace.
-    if (target !== lastTarget.current) {
+    if (!live && target !== lastTarget.current) {
       const dir = Math.sign(target - pos.current) || 1;
       const walkIn = WALK_IN_M / ROUTE_SPACING;
       if (Math.abs(target - pos.current) > walkIn * 1.5) {
@@ -673,14 +831,25 @@ function World(props: SceneProps) {
       }
     }
     const diff = target - pos.current;
-    const walking = Math.abs(diff) > 0.01;
-    pos.current = walking ? pos.current + Math.sign(diff) * Math.min(Math.abs(diff), dt * speed.current) : target;
+    const walking = live ? live.speed > 0.15 : Math.abs(diff) > 0.01;
+    if (!live) pos.current = walking ? pos.current + Math.sign(diff) * Math.min(Math.abs(diff), dt * speed.current) : target;
     motion.current.walking = walking;
     partnerMotion.current.walking = walking;
+    motion.current.speed = live ? live.speed : 1.3;
+    partnerMotion.current.speed = motion.current.speed;
+    if (live && walking) moveSign.current = Math.sign(diff) || moveSign.current;
 
-    const here = at(pos.current);
+    const onTrack = at(pos.current);
+    const here = onTrack.clone();
+    if (live && Math.abs(lateral.current) > 0.01) {
+      // Step sideways off the track, perpendicular to the route (right of uphill is +).
+      const fwd = at(pos.current + 1).sub(onTrack).setY(0).normalize();
+      here.x += -fwd.z * lateral.current;
+      here.z += fwd.x * lateral.current;
+      here.y = surfaceAt(here.x, here.z);
+    }
     // Walking: face the way you move. Stopped: turn to face the next stretch of the route.
-    const facingDir = walking ? Math.sign(diff) : p.facing === 'down' && p.node > 0 ? -1 : 1;
+    const facingDir = walking ? (live ? moveSign.current : Math.sign(diff)) : p.facing === 'down' && p.node > 0 ? -1 : 1;
     const ahead = at(pos.current + (12 / ROUTE_SPACING) * facingDir);
     const wantHeading = Math.atan2(ahead.x - here.x, ahead.z - here.z);
     if (Number.isFinite(wantHeading)) {
@@ -688,19 +857,24 @@ function World(props: SceneProps) {
       d = Math.atan2(Math.sin(d), Math.cos(d));
       heading.current += d * Math.min(1, dt * (walking ? 10 : 2));
     }
+    playerPos.current.copy(here);
     if (climber.current) {
       climber.current.position.copy(here);
       climber.current.rotation.y = heading.current;
     }
 
-    // Keep the detail patch under the climber (normally built when a new stop is set).
-    if (follow && !walking) {
+    // Keep the detail patch under the climber. Walking, rebuild a little ahead of the edge.
+    if (follow && (live || !walking)) {
       const cur = currentPatch();
-      if (!cur || Math.hypot(here.x - cur.cx, here.z - cur.cz) > PATCH_HALF * 0.6) setPatch(buildPatch(here.x, here.z));
+      const reach = live ? PATCH_HALF * 0.42 : PATCH_HALF * 0.6;
+      if (!cur || Math.hypot(here.x - cur.cx, here.z - cur.cz) > reach) {
+        const lead = at(pos.current + (220 / ROUTE_SPACING) * (live ? moveSign.current : 0));
+        setPatch(buildPatch((here.x + lead.x) / 2, (here.z + lead.z) / 2));
+      }
     }
 
     // Partner trails a rope length behind.
-    const back = (ROPE_M / ROUTE_SPACING) * (walking ? Math.sign(diff) : p.node === 0 ? -1 : 1);
+    const back = (ROPE_M / ROUTE_SPACING) * (walking ? (live ? moveSign.current : Math.sign(diff)) : p.node === 0 ? -1 : 1);
     const ph = at(pos.current - back);
     if (partner.current) {
       partner.current.visible = follow;
@@ -847,6 +1021,7 @@ function World(props: SceneProps) {
       {patch && <DetailPatch patch={patch} />}
       <RouteTrack highlight={routeHighlight} />
       <RouteMarkers wands={props.wands} patchId={patch ? patch.cx * 1e5 + patch.cz : 0} />
+      {follow && <OtherTeams clock={props.clock} night={night} player={playerPos} />}
       <CloudSea amount={clouds} />
       <SkyClouds amount={cumulus} />
       <Snowfall intensity={snow} center={camTarget} />

@@ -194,6 +194,32 @@ function buildRoute() {
 }
 
 export const ROUTE = buildRoute();
+
+/** Meters along the route at each route point (matches src/game/data/routeProfile.ts). */
+export const ROUTE_CUM: number[] = (() => {
+  const out = [0];
+  for (let i = 1; i < ROUTE.pts.length; i++) {
+    const [ax, , az] = ROUTE.pts[i - 1];
+    const [bx, , bz] = ROUTE.pts[i];
+    out.push(out[i - 1] + Math.hypot(bx - ax, bz - az));
+  }
+  return out;
+})();
+
+/** Fractional route-point index at a distance along the route. */
+export function routeIndexAt(d: number) {
+  if (d <= 0) return 0;
+  const last = ROUTE_CUM.length - 1;
+  if (d >= ROUTE_CUM[last]) return last;
+  let lo = 0;
+  let hi = last;
+  while (hi - lo > 1) {
+    const mid = (lo + hi) >> 1;
+    if (ROUTE_CUM[mid] <= d) lo = mid;
+    else hi = mid;
+  }
+  return lo + (d - ROUTE_CUM[lo]) / (ROUTE_CUM[hi] - ROUTE_CUM[lo] || 1);
+}
 export const SUMMIT_POS: Vec3 = ROUTE.pts[ROUTE.pts.length - 1];
 
 export function nodePosition(i: number): Vec3 {

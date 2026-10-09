@@ -77,6 +77,14 @@ export interface GameState {
   moveId: number;
   restsHere: number;
   prevNode: number;
+  /** Meters along the route from Paradise (see src/game/data/routeProfile.ts). */
+  dist: number;
+  /** Sideways offset from the boot track, meters (+ = right of travel direction going up). */
+  lateral: number;
+  /** Clock when the party left the last stop, for the arrival events. */
+  legStart: number;
+  /** Meters walked off the boot track on this leg. */
+  legOffTrack: number;
 }
 
 export type Rng = () => number;
@@ -115,4 +123,6 @@ export interface ArrivalContext {
   /** Clock at the start of the leg. */
   start: number;
   minutes: number;
+  /** Meters walked off the boot track on this leg (raises crevasse risk on glaciers). */
+  offTrack?: number;
 }

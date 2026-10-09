@@ -1,16 +1,21 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
-import { Animated, PanResponder, Pressable, ScrollView, StyleSheet, Text, View, useWindowDimensions } from 'react-native';
+import { PanResponder, Pressable, ScrollView, StyleSheet, Text, View, useWindowDimensions } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import * as Haptics from 'expo-haptics';
 import {
-  LAYER_LABEL, WEATHER_LABEL, chooseEvent, doAction, eventChoices, fmtDuration, listActions, moveBlockedReason, roped,
-  warmthTrend, type Action,
+  LAYER_LABEL, WEATHER_LABEL, atStop, chooseEvent, clone, currentFt, doAction, elevAt, eventChoices, listActions,
+  moveBlockedReason, roped, warmthTrend, type Action,
 } from '../game/engine';
+import {
+  TIME_SCALE, beatSeconds, breathsPerStep, legAt, metersToNext, nextStopName, restStepActive, speed, walkMut,
+} from '../game/movement';
 import { ENDINGS } from '../game/endings';
 import { EVENT_BY_ID } from '../game/events';
-import { NODES, dayOf, formatClock, formatFt } from '../game/route';
-import type { GameState, LogEntry, Stats } from '../game/types';
-import { MountainScene, type CameraControl } from '../scene/MountainScene';
+import { LEGS, NODES, SUMMIT, dayOf, formatClock, formatFt } from '../game/route';
+import type { GameState, LogEntry, Pace, Stats } from '../game/types';
+import { MountainScene, type CameraControl, type LiveMove } from '../scene/MountainScene';
+import { RestStep } from './RestStep';
+import { Thumbstick, type Stick } from './Thumbstick';
 import { C, NUM, climberLook, partnerLook, statColor } from './theme';
 
 const VITALS: { key: keyof Stats; label: string; inverted?: boolean }[] = [
@@ -66,50 +71,126 @@ export function ClimbScreen({
     if (state.pendingEvent) fire(Haptics.notificationAsync(Haptics.NotificationFeedbackType.Warning));
   }, [state.pendingEvent]);
 
-  // Time-lapse card between stops: the leg takes hours, the screen takes a breath.
-  const fade = useRef(new Animated.Value(0)).current;
-  const lastMove = useRef({ id: state.moveId, clock: state.clock });
-  const [cut, setCut] = useState<{ place: string; ft: string; took: string } | null>(null);
-  useEffect(() => {
-    if (state.moveId === lastMove.current.id) return;
-    const took = fmtDuration(state.clock - lastMove.current.clock);
-    lastMove.current = { id: state.moveId, clock: state.clock };
-    const n = NODES[state.node];
-    setCut({ place: n.name, ft: formatFt(n.ft), took });
-    fade.setValue(1);
-    Animated.timing(fade, { toValue: 0, duration: 1600, delay: 900, useNativeDriver: true }).start(() => setCut(null));
-  }, [state.moveId, state.clock, state.node, fade]);
+  const stateRef = useRef(state);
+  stateRef.current = state;
 
-  function commit(next: GameState) {
-    if (next === state) return;
+  function commit(next: GameState, quiet = false) {
+    const prev = stateRef.current;
+    if (next === prev) return;
+    stateRef.current = next;
     const newest = next.log[0];
-    const prevNewest = state.log[0];
+    const prevNewest = prev.log[0];
     const freshBad = newest?.tone === 'bad' && (newest.text !== prevNewest?.text || newest.clock !== prevNewest?.clock);
-    if (next.ending && !state.ending) {
+    if (next.ending && !prev.ending) {
       fire(Haptics.notificationAsync(
         ENDINGS[next.ending].good ? Haptics.NotificationFeedbackType.Success : Haptics.NotificationFeedbackType.Error,
       ));
-    } else if (next.summited && !state.summited) {
+    } else if (next.summited && !prev.summited) {
       fire(Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success));
     } else if (freshBad) {
       fire(Haptics.notificationAsync(Haptics.NotificationFeedbackType.Error));
-    } else {
+    } else if (next.node !== prev.node) {
+      fire(Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Medium));
+    } else if (!quiet) {
       fire(Haptics.selectionAsync());
     }
     onState(next);
   }
 
+  // ---------- walking ----------
+  const stick = useRef<Stick>({ x: 0, y: 0 });
+  const rhythm = useRef(0.6);
+  const [auto, setAuto] = useState(false);
+  const autoRef = useRef(false);
+  autoRef.current = auto;
+  const live = useRef<LiveMove>({ dist: state.dist, lateral: state.lateral, speed: 0 });
+  const working = useRef<GameState | null>(null);
+  const lastCommit = useRef(0);
+  const [walking, setWalking] = useState(false);
+  const walkingRef = useRef(false);
+
+  useEffect(() => {
+    if (!working.current) {
+      live.current.dist = state.dist;
+      live.current.lateral = state.lateral;
+    }
+  }, [state]);
+
+  useEffect(() => {
+    let raf = 0;
+    let last = Date.now();
+    const flush = () => {
+      const w = working.current;
+      if (!w) return;
+      working.current = null;
+      lastCommit.current = Date.now();
+      commit(w, true);
+    };
+    const tick = () => {
+      const now = Date.now();
+      const dt = Math.min(0.1, (now - last) / 1000);
+      last = now;
+      const base = working.current ?? stateRef.current;
+      const y = autoRef.current ? 0.65 : stick.current.y;
+      const x = autoRef.current ? 0 : stick.current.x;
+      const push = Math.min(1, Math.hypot(x, y));
+      let moving = false;
+      if (push > 0.12 && !base.ending && !base.pendingEvent) {
+        const w = working.current ?? (working.current = clone(base));
+        const pace: Pace = push < 0.45 ? 'rest' : push < 0.85 ? 'steady' : 'push';
+        const gameMinutes = (dt * TIME_SCALE) / 60;
+        // Forward/back from the stick; a sideways-only push still edges you forward slowly.
+        const along = Math.abs(y) > 0.12 ? Math.sign(y) : 0.3;
+        const meters = speed(w, pace) * gameMinutes * along;
+        // "Right" on screen is right of the way you face.
+        const side = (w.dir === 'up' ? 1 : -1) * (Math.abs(x) > 0.12 ? x : 0);
+        const node0 = w.node;
+        const moved = walkMut(w, meters, { pace, rhythm: rhythm.current, lateral: w.lateral + side * 2.5 * dt }, Math.random);
+        moving = moved > 0;
+        live.current = { dist: w.dist, lateral: w.lateral, speed: moved / Math.max(dt, 1e-3) };
+        const arrived = w.node !== node0;
+        if (!moving && autoRef.current) setAuto(false);
+        if (arrived && autoRef.current) setAuto(false);
+        if (arrived || w.pendingEvent || w.ending || !moving || now - lastCommit.current > 150) flush();
+      } else {
+        live.current.speed = 0;
+        flush();
+      }
+      if (moving !== walkingRef.current) {
+        walkingRef.current = moving;
+        setWalking(moving);
+      }
+      raf = requestAnimationFrame(tick);
+    };
+    raf = requestAnimationFrame(tick);
+    return () => cancelAnimationFrame(raf);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
   const act = (id: string) => {
     setSheet('none');
-    commit(doAction(state, id));
+    setAuto(false);
+    const base = working.current ?? stateRef.current;
+    working.current = null;
+    commit(doAction(base, id));
   };
 
   const node = NODES[state.node];
-  const actions = listActions(state);
+  // Walking replaces the old "Climb to X" buttons: drop every go:* action.
+  const actions = listActions(state).filter((a) => !a.id.startsWith('go:'));
   const primary = actions.filter((a) => a.primary);
   const quick = QUICK.map((id) => actions.find((a) => a.id === id)).filter((a): a is Action => !!a);
   const more = actions.filter((a) => !a.primary && !QUICK.includes(a.id));
-  const blocked = moveBlockedReason(state);
+  const stopped = atStop(state);
+  const next = nextStopName(state);
+  const toNext = metersToNext(state);
+  const place = stopped ? node.name : LEGS[legAt(state.dist)].name;
+  const elevM = elevAt(state.dist);
+  const showRhythm = restStepActive(state) && !state.ending && !state.pendingEvent;
+  const [panelH, setPanelH] = useState(220);
+  // On top, pushing forward starts the descent, so the summit message doesn't block the stick.
+  const onTop = state.node === SUMMIT && state.dir === 'up';
+  const blocked = onTop ? undefined : moveBlockedReason(state);
   const trend = warmthTrend(state);
   const event = state.pendingEvent ? EVENT_BY_ID[state.pendingEvent] : null;
   const ending = state.ending ? ENDINGS[state.ending] : null;
@@ -129,24 +210,17 @@ export function ClimbScreen({
           mode="follow"
           control={control}
           facing={state.dir}
+          live={live}
         />
       </View>
       <View style={StyleSheet.absoluteFill} {...pan.panHandlers} />
-
-      {cut && (
-        <Animated.View style={[styles.cut, { opacity: fade }]} pointerEvents="none">
-          <Text style={styles.cutTook}>{cut.took} later</Text>
-          <Text style={styles.cutPlace}>{cut.place}</Text>
-          <Text style={[styles.cutFt, NUM]}>{cut.ft}</Text>
-        </Animated.View>
-      )}
 
       {/* ---------- top HUD ---------- */}
       <View style={[styles.top, { paddingTop: insets.top + 8 }]} pointerEvents="box-none">
         <View style={styles.topRow} pointerEvents="box-none">
           <View style={styles.chip} pointerEvents="none">
-            <Text style={styles.place} numberOfLines={1}>{node.name.toUpperCase()}</Text>
-            <Text style={[styles.big, NUM]}>{formatFt(node.ft)}</Text>
+            <Text style={styles.place} numberOfLines={1}>{place.toUpperCase()}</Text>
+            <Text style={[styles.big, NUM]}>{formatFt(currentFt(state))}</Text>
           </View>
           <View style={[styles.chip, { alignItems: 'flex-end' }]} pointerEvents="none">
             <Text style={[styles.place, NUM]}>DAY {dayOf(state.clock)} · {state.dir === 'up' ? 'ASCENT' : 'DESCENT'}</Text>
@@ -194,8 +268,18 @@ export function ClimbScreen({
         </View>
       </View>
 
+      {/* ---------- controls over the scene ---------- */}
+      {!ending && !event && (
+        <View style={[styles.controls, { bottom: panelH + 10 }]} pointerEvents="box-none">
+          <Thumbstick stick={stick} disabled={!!blocked} />
+          {showRhythm ? (
+            <RestStep interval={beatSeconds(elevM)} breaths={breathsPerStep(elevM)} walking={walking} quality={rhythm} />
+          ) : <View />}
+        </View>
+      )}
+
       {/* ---------- bottom panel ---------- */}
-      <View style={[styles.panel, { paddingBottom: insets.bottom + 12 }]}>
+      <View style={[styles.panel, { paddingBottom: insets.bottom + 12 }]} onLayout={(e) => setPanelH(e.nativeEvent.layout.height)}>
         {ending ? (
           <>
             <Text style={[styles.endTitle, { color: ending.good ? C.good : C.bad }]}>{ending.title}</Text>
@@ -206,9 +290,16 @@ export function ClimbScreen({
           </>
         ) : (
           <>
-            <Text style={state.lastOutcome ? styles.outcome : styles.caption} numberOfLines={5}>
-              {state.lastOutcome ?? node.desc}
+            <Text style={state.lastOutcome ? styles.outcome : styles.caption} numberOfLines={4}>
+              {state.lastOutcome ?? (stopped ? node.desc : `${LEGS[legAt(state.dist)].name}.`)}
             </Text>
+            {onTop ? <Text style={styles.toNext}>Push the stick forward to start down.</Text> : null}
+            {next ? (
+              <Text style={[styles.toNext, NUM]}>
+                {toNext >= 1000 ? `${(toNext / 1000).toFixed(1)} km` : `${Math.round(toNext)} m`} to {next}
+                {Math.abs(state.lateral) > 1.5 ? '  ·  off the boot track' : ''}
+              </Text>
+            ) : null}
             {blocked ? <Text style={styles.blocked}>{blocked}</Text> : null}
             {primary.map((a) => (
               <Pressable
@@ -241,6 +332,11 @@ export function ClimbScreen({
               <Pressable onPress={() => setSheet('options')} hitSlop={8} accessibilityRole="button">
                 <Text style={styles.link}>Options{more.length ? ` (${more.length})` : ''}</Text>
               </Pressable>
+              {next && !blocked ? (
+                <Pressable onPress={() => setAuto((a) => !a)} hitSlop={8} accessibilityRole="button">
+                  <Text style={[styles.link, auto && { color: C.accent }]}>{auto ? 'Stop auto-walk' : `Auto-walk to ${next}`}</Text>
+                </Pressable>
+              ) : null}
               <Pressable onPress={() => setSheet('notes')} hitSlop={8} accessibilityRole="button">
                 <Text style={styles.link}>Field notes</Text>
               </Pressable>
@@ -333,10 +429,8 @@ function quickDetail(id: string, s: GameState) {
 
 const styles = StyleSheet.create({
   root: { flex: 1, backgroundColor: C.bg },
-  cut: { position: 'absolute', top: 0, right: 0, bottom: 0, left: 0, backgroundColor: '#05090e', alignItems: 'center', justifyContent: 'center', gap: 4 },
-  cutTook: { color: C.muted, fontSize: 13, fontWeight: '700', letterSpacing: 1.2, textTransform: 'uppercase' },
-  cutPlace: { color: C.text, fontSize: 30, fontWeight: '800' },
-  cutFt: { color: C.ice, fontSize: 16, fontWeight: '700' },
+  controls: { position: 'absolute', left: 16, right: 16, flexDirection: 'row', justifyContent: 'space-between', alignItems: 'flex-end' },
+  toNext: { color: C.ice, fontSize: 12, fontWeight: '700' },
 
   top: { position: 'absolute', left: 0, right: 0, top: 0, paddingHorizontal: 12, gap: 8 },
   topRow: { flexDirection: 'row', justifyContent: 'space-between', gap: 8 },

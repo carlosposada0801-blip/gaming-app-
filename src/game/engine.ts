@@ -6,6 +6,7 @@ import type {
   ArrivalContext, Forecast, GameState, LayerLevel, Outcome, Pace, Rng, Stats, Weather,
 } from './types';
 import { EVENTS, EVENT_BY_ID } from './events';
+import { NODE_DIST, PROFILE_DIST, PROFILE_ELEV } from './data/routeProfile';
 
 // ---------- helpers ----------
 
@@ -14,17 +15,41 @@ export { crampons, has, roped };
 
 const clamp = (n: number, lo = 0, hi = 100) => Math.max(lo, Math.min(hi, n));
 
-function clone(s: GameState): GameState {
+export function clone(s: GameState): GameState {
   return JSON.parse(JSON.stringify(s));
 }
 
-function log(s: GameState, text: string, tone?: 'good' | 'bad' | 'info') {
+export function log(s: GameState, text: string, tone?: 'good' | 'bad' | 'info') {
   s.log.unshift({ clock: s.clock, text, tone });
   if (s.log.length > 60) s.log.length = 60;
 }
 
+/** Elevation (m) at a distance along the route, from the real terrain profile. */
+export function elevAt(d: number) {
+  let lo = 0;
+  let hi = PROFILE_DIST.length - 1;
+  if (d <= 0) return PROFILE_ELEV[0];
+  if (d >= PROFILE_DIST[hi]) return PROFILE_ELEV[hi];
+  while (hi - lo > 1) {
+    const mid = (lo + hi) >> 1;
+    if (PROFILE_DIST[mid] <= d) lo = mid;
+    else hi = mid;
+  }
+  const t = (d - PROFILE_DIST[lo]) / (PROFILE_DIST[hi] - PROFILE_DIST[lo] || 1);
+  return PROFILE_ELEV[lo] + (PROFILE_ELEV[hi] - PROFILE_ELEV[lo]) * t;
+}
+
+const M_TO_FT = 3.28084;
+
+/** True when standing at a stop (not partway along a leg). */
+export function atStop(s: GameState) {
+  return Math.abs(s.dist - NODE_DIST[s.node]) < 1;
+}
+
+/** Where the party stands, in feet. At a stop this is the stop's published elevation. */
 export function currentFt(s: GameState) {
-  return NODES[s.node].ft;
+  if (Math.abs(s.dist - NODE_DIST[s.node]) < 1) return NODES[s.node].ft;
+  return elevAt(s.dist) * M_TO_FT;
 }
 
 export const WEATHER_LABEL: Record<Weather, string> = {
@@ -71,7 +96,7 @@ export function coldIndex(s: GameState, ft = currentFt(s), clock = s.clock) {
 }
 
 /** Apply warmth, sweat, and hydration for a stretch of time. */
-function thermal(s: GameState, hours: number, moving: boolean, ft: number) {
+export function thermal(s: GameState, hours: number, moving: boolean, ft: number) {
   const insul = insulation(s) + (moving ? 1.5 : 0);
   const diff = insul - coldIndex(s, ft);
   if (diff < 0) {
@@ -168,6 +193,10 @@ export function newGame(packed: string[], rng: Rng = Math.random): GameState {
     moveId: 0,
     restsHere: 0,
     prevNode: 0,
+    dist: NODE_DIST[0],
+    lateral: 0,
+    legStart: START_CLOCK,
+    legOffTrack: 0,
   };
   log(s, `Paradise, ${formatClock(s.clock)}. Pack weight ${packWeightLb(packed)} lb.`, 'info');
   return s;
@@ -180,12 +209,11 @@ const PACE_STAMINA: Record<Pace, number> = { rest: 0.75, steady: 1, push: 1.35 }
 const PACE_AMS: Record<Pace, number> = { rest: 0.6, steady: 1, push: 1.5 };
 const WEATHER_TIME: Record<Weather, number> = { clear: 1, windy: 1.1, whiteout: 1.3, coldsnap: 1.05, storm: 1.5 };
 
-function legIndex(s: GameState) {
+export function legIndex(s: GameState) {
   return s.dir === 'up' ? s.node : s.node - 1;
 }
 
-export function legMinutes(s: GameState, pace: Pace) {
-  const i = legIndex(s);
+export function legMinutes(s: GameState, pace: Pace, i = legIndex(s)) {
   const leg = LEGS[i];
   if (!leg) return 0;
   let t = leg.minutes * PACE_TIME[pace];
@@ -260,6 +288,10 @@ function travel(s: GameState, pace: Pace, rng: Rng) {
   s.clock += minutes;
   s.prevNode = from;
   s.node = to;
+  s.dist = NODE_DIST[to];
+  s.lateral = 0;
+  s.legStart = s.clock;
+  s.legOffTrack = 0;
   s.moveId += 1;
   s.restsHere = 0;
 
@@ -296,6 +328,8 @@ function travel(s: GameState, pace: Pace, rng: Rng) {
   rollEvent(s, { leg: i, dir: s.dir, start, minutes }, rng);
 }
 
+export { PACE_TIME, PACE_STAMINA, PACE_AMS };
+
 export function fmtDuration(min: number) {
   const h = Math.floor(min / 60);
   const m = Math.round(min % 60);
@@ -303,20 +337,20 @@ export function fmtDuration(min: number) {
   return m ? `${h} h ${m} min` : `${h} h`;
 }
 
-function clampStats(s: GameState) {
+export function clampStats(s: GameState) {
   const st = s.stats;
   (Object.keys(st) as (keyof Stats)[]).forEach((k) => { st[k] = clamp(st[k]); });
   s.partnerAms = clamp(s.partnerAms);
 }
 
-function checkVitals(s: GameState) {
+export function checkVitals(s: GameState) {
   if (s.ending) return;
   if (s.stats.warmth <= 0) s.ending = 'hypothermia';
   else if (s.stats.stamina <= 0) s.ending = 'exhaustion';
   else if (s.stats.ams >= 100) s.ending = 'ams';
 }
 
-function rollEvent(s: GameState, ctx: ArrivalContext, rng: Rng) {
+export function rollEvent(s: GameState, ctx: ArrivalContext, rng: Rng) {
   for (const ev of EVENTS) {
     if (!ev.repeatable && s.usedEvents.includes(ev.id)) continue;
     const p = ev.chance(s, ctx);
@@ -354,13 +388,13 @@ export function listActions(s: GameState): Action[] {
     out.push({ id: 'go:rest', label: 'Descend carefully', detail: `Slower, safer footing · ${fmtDuration(legMinutes(s, 'rest'))}`, disabled: !move.ok });
   }
 
-  if (s.node === MUIR && s.dir === 'up' && !s.slept) {
+  if (s.node === MUIR && s.dir === 'up' && !s.slept && atStop(s)) {
     out.push({ id: 'sleep', label: 'Sleep until alpine start', detail: `Wake at ${formatClock(ALPINE_START)}`, primary: true });
   }
-  if (s.node === MUIR && s.dir === 'up') {
+  if (s.node === MUIR && s.dir === 'up' && atStop(s)) {
     out.push({ id: 'turnaround', label: `Turnaround time: ${formatClock(s.turnaround)}`, detail: 'Tap to change' });
   }
-  if (s.node === MUIR && has(s, 'stove')) {
+  if (s.node === MUIR && has(s, 'stove') && atStop(s)) {
     out.push({ id: 'melt', label: 'Melt snow for water', detail: '45 min · refill to 3 L', disabled: s.water >= 3 });
   }
   out.push({ id: 'drink', label: 'Drink', detail: s.water > 0 ? `${s.water.toFixed(1)} L left` : 'No water', disabled: s.water < 0.5 });
@@ -416,12 +450,12 @@ export function doAction(prev: GameState, id: string, rng: Rng = Math.random): G
     s.stats.ams -= 3;
     idle(20);
     log(s, gain > 4 ? 'Took a 20-minute break.' : 'Another break. Your legs stiffen as you sit in the cold.');
-  } else if (id === 'melt' && has(s, 'stove')) {
+  } else if (id === 'melt' && has(s, 'stove') && s.node === MUIR && atStop(s)) {
     s.water = 3;
     s.stats.morale += 3;
     idle(45);
     log(s, 'Melted snow and refilled to 3 liters.', 'good');
-  } else if (id === 'sleep' && s.node === MUIR && !s.slept) {
+  } else if (id === 'sleep' && s.node === MUIR && !s.slept && atStop(s)) {
     sleepAtMuir(s, rng);
   } else if (id === 'turnaround') {
     const options = [DAY + 540, DAY + 600, DAY + 660];

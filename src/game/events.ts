@@ -286,6 +286,8 @@ export const EVENTS: EventDef[] = [
     chance: (s, c) =>
       [2, 4, 5].includes(c.leg)
         ? 0.12 + (c.dir === 'down' && minuteOfDay(s.clock) > 660 ? 0.15 : 0) + (s.flags.pushedPastTurnaround ? 0.08 : 0)
+          // Leaving the boot track means stepping on untested snow bridges.
+          + Math.min(0.35, (c.offTrack ?? 0) / 400)
         : 0,
     text: (s) =>
       roped(s)

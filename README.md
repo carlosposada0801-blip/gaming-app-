@@ -15,6 +15,13 @@ altitude sickness, morale, weather and time.
    ```
 3. Scan the QR code with your phone's camera (iPhone) or with Expo Go (Android).
 
+## Balance simulation
+
+```sh
+npm run sim                       # 2,000 seeded climbs per player style
+npm run sim -- --trace smart 1001 # one climb's field notes
+```
+
 ## Put it on the App Store
 
 With an Apple Developer account ($99/year), EAS builds and signs the app in the cloud, so no Mac is required:

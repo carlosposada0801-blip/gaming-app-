@@ -25,6 +25,8 @@ export interface ClimberLook {
 export interface Motion {
   walking: boolean;
   phase: number;
+  /** Ground speed in meters per real second, to pace the walk cycle. */
+  speed?: number;
 }
 
 const PANTS = '#262d38';
@@ -347,6 +349,8 @@ export function Climber({ look, motion }: { look: ClimberLook; motion: React.Mut
     const target = motion.current.walking ? 1 : 0;
     rig.blend += (target - rig.blend) * Math.min(1, dt * 5);
     rig.walk.setEffectiveWeight(rig.blend);
+    // The mocap walk covers about 1.3 m per second; play it faster when the clock is compressed.
+    rig.walk.timeScale = Math.max(0.6, Math.min(3, (motion.current.speed ?? 1.3) / 1.3));
     rig.idle.setEffectiveWeight(1 - rig.blend);
     rig.mixer.update(Math.min(dt, 0.1));
   });
