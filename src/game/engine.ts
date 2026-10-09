@@ -206,7 +206,8 @@ export function newGame(packed: string[], rng: Rng = Math.random): GameState {
 
 const PACE_TIME: Record<Pace, number> = { rest: 1.3, steady: 1, push: 0.8 };
 const PACE_STAMINA: Record<Pace, number> = { rest: 0.75, steady: 1, push: 1.35 };
-const PACE_AMS: Record<Pace, number> = { rest: 0.6, steady: 1, push: 1.5 };
+// Gaining height fast is the classic cause of altitude sickness: pushing builds it much faster.
+const PACE_AMS: Record<Pace, number> = { rest: 0.6, steady: 1, push: 1.8 };
 const WEATHER_TIME: Record<Weather, number> = { clear: 1, windy: 1.1, whiteout: 1.3, coldsnap: 1.05, storm: 1.5 };
 
 export function legIndex(s: GameState) {
@@ -513,13 +514,13 @@ export function eventChoices(s: GameState) {
   return EVENT_BY_ID[s.pendingEvent].choices(s);
 }
 
-export function chooseEvent(prev: GameState, index: number, rng: Rng = Math.random): GameState {
+export function chooseEvent(prev: GameState, index: number, rng: Rng = Math.random, perf?: number): GameState {
   if (!prev.pendingEvent) return prev;
   const s = clone(prev);
   const def = EVENT_BY_ID[prev.pendingEvent];
   const choice = def.choices(s)[index];
   if (!choice || choice.disabled) return prev;
-  const outcome: Outcome = choice.resolve(s, rng);
+  const outcome: Outcome = choice.resolve(s, rng, perf === undefined ? undefined : Math.max(0, Math.min(1, perf)));
   applyOutcome(s, outcome);
   s.usedEvents.push(def.id);
   s.pendingEvent = null;

@@ -99,11 +99,20 @@ export interface Outcome {
   mutate?: (s: GameState) => void;
 }
 
+/** Hands-on skills the player performs as a mini-game (Phase 2). */
+export type SkillId = 'arrest' | 'prusik' | 'zpulley' | 'ladder';
+
 export interface Choice {
   label: string;
   hint?: string;
   disabled?: boolean;
-  resolve: (s: GameState, rng: Rng) => Outcome;
+  /** If set, the climb screen plays this skill and passes the result to `resolve`. */
+  skill?: SkillId;
+  /**
+   * `perf` is how well the player performed the skill, 0 (botched) to 1 (textbook). When it is
+   * undefined (no mini-game, e.g. the simulation's legacy players) the classic odds apply.
+   */
+  resolve: (s: GameState, rng: Rng, perf?: number) => Outcome;
 }
 
 export interface EventDef {

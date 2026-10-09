@@ -15,6 +15,10 @@ import { LEGS, NODES, SUMMIT, dayOf, formatClock, formatFt } from '../game/route
 import type { GameState, LogEntry, Pace, Stats } from '../game/types';
 import { MountainScene, type CameraControl, type LiveMove } from '../scene/MountainScene';
 import { RestStep } from './RestStep';
+import { SkillGame } from './SkillGame';
+import { legOf } from '../game/skills';
+import { has } from '../game/helpers';
+import type { SkillId } from '../game/types';
 import { Thumbstick, type Stick } from './Thumbstick';
 import { C, NUM, climberLook, partnerLook, statColor } from './theme';
 
@@ -50,6 +54,7 @@ export function ClimbScreen({
   const control = useRef<CameraControl>({ yaw: 0, dist: 8, overview: false });
   const [overview, setOverview] = useState(false);
   const [sheet, setSheet] = useState<'none' | 'options' | 'notes'>('none');
+  const [skillRun, setSkillRun] = useState<{ index: number; skill: SkillId } | null>(null);
 
   const drag = useRef({ yaw: 0, dist: 8 });
   const pan = useMemo(
@@ -69,6 +74,11 @@ export function ClimbScreen({
 
   useEffect(() => {
     if (state.pendingEvent) fire(Haptics.notificationAsync(Haptics.NotificationFeedbackType.Warning));
+    // A slip gives no time to read a menu: if you carry an axe, the self-arrest starts at once.
+    if (state.pendingEvent === 'slip') {
+      const i = eventChoices(state).findIndex((c) => c.skill === 'arrest' && !c.disabled);
+      if (i >= 0) setSkillRun({ index: i, skill: 'arrest' });
+    }
   }, [state.pendingEvent]);
 
   const stateRef = useRef(state);
@@ -211,6 +221,7 @@ export function ClimbScreen({
           control={control}
           facing={state.dir}
           live={live}
+          paused={!!skillRun}
         />
       </View>
       <View style={StyleSheet.absoluteFill} {...pan.panHandlers} />
@@ -381,8 +392,23 @@ export function ClimbScreen({
         </View>
       )}
 
+      {/* ---------- skill mini-game ---------- */}
+      {event && skillRun && (
+        <SkillGame
+          skill={skillRun.skill}
+          title={event.title}
+          slopeDeg={LEGS[legOf(state)].slopeDeg}
+          picket={has(state, 'picket')}
+          onDone={(perf) => {
+            const idx = skillRun.index;
+            setSkillRun(null);
+            commit(chooseEvent(stateRef.current, idx, Math.random, perf));
+          }}
+        />
+      )}
+
       {/* ---------- event sheet ---------- */}
-      {event && (
+      {event && !skillRun && (
         <View style={styles.scrim}>
           <View style={[styles.sheet, { paddingBottom: insets.bottom + 16, maxHeight: height * 0.8 }]}>
             <ScrollView contentContainerStyle={{ gap: 12 }}>
@@ -394,7 +420,7 @@ export function ClimbScreen({
                   <Pressable
                     key={i}
                     disabled={ch.disabled}
-                    onPress={() => commit(chooseEvent(state, i))}
+                    onPress={() => (ch.skill ? setSkillRun({ index: i, skill: ch.skill }) : commit(chooseEvent(state, i)))}
                     style={({ pressed }) => [styles.row, ch.disabled && { opacity: 0.45 }, pressed && { backgroundColor: C.line }]}
                     accessibilityRole="button"
                     accessibilityState={{ disabled: !!ch.disabled }}

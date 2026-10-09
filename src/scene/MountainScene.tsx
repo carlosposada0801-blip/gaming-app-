@@ -35,6 +35,8 @@ export interface SceneProps {
   facing?: 'up' | 'down';
   /** Live position from the thumbstick, updated every frame without re-rendering. */
   live?: React.MutableRefObject<LiveMove>;
+  /** Freeze rendering (the last frame stays on screen), e.g. while a skill mini-game is open. */
+  paused?: boolean;
 }
 
 export interface LiveMove {
@@ -1040,6 +1042,7 @@ export function MountainScene(props: SceneProps) {
   const start = nodePosition(props.node);
   return (
     <Canvas
+      frameloop={props.paused ? 'never' : 'always'}
       shadows
       camera={{ position: [start[0], start[1] + 4, start[2] + 8], fov: 62, near: 0.5, far: 400000 }}
       onCreated={({ gl }) => { gl.toneMappingExposure = 1.05; }}

@@ -11,7 +11,9 @@ See AGENTS.md for Expo rules (use `npx expo install`, check versioned docs).
 ## Stack
 - Expo SDK 57, React Native 0.86, React 19.2
 - 3D: `three` + `@react-three/fiber` (import from `@react-three/fiber/native`) + `expo-gl`
-- `react-native-safe-area-context`, `expo-haptics`, `@react-native-async-storage/async-storage`
+- `react-native-safe-area-context`, `expo-haptics`, `@react-native-async-storage/async-storage`, `expo-sensors`
+- `npx expo install` needs api.expo.dev; offline, install the version listed in
+  `node_modules/expo/bundledNativeModules.json` with npm (same result).
 - No Expo Router yet: a single game screen state machine in App.tsx is fine for now.
 
 ## Done
@@ -65,6 +67,17 @@ See AGENTS.md for Expo rules (use `npx expo install`, check versioned docs).
   1–3 breaths per step by altitude).
 - Other rope teams on summit day (`OtherTeams` in `MountainScene.tsx`): five parties leaving Muir
   between ~11:35 PM and ~1:50 AM, headlamps visible at any distance at night.
+- Phase 2 skills: `Choice.skill` (`arrest` | `prusik` | `zpulley` | `ladder`) marks options the
+  player performs; `chooseEvent(s, i, rng, perf)` passes performance 0..1 to `resolve`, and
+  `src/game/skills.ts` maps it onto the event's existing outcome shape (gear checks stay in
+  events.ts). `perf` undefined = classic odds. Self-arrest odds = 0.15 + 0.95·perf, minus steep-slope
+  (per-leg `slopeDeg` in route.ts, approximate) and dull/no-crampon penalties.
+  `src/ui/SkillGame.tsx`: the mini-games (slip auto-starts the self-arrest; swipe toward the axe,
+  then hold; prusik SLIDE/STAND rhythm; Z-pulley rigging order + timed hauls; ladder balance by tilt
+  via expo-sensors Accelerometer, or drag). "Let the dice decide" = classic odds. The 3D scene is
+  paused (`paused` prop, frameloop 'never') while a mini-game is open.
+- Balance (approved with Phase 2): past the turnaround time rockfall +0.2, crevasse +0.2, descent
+  slips +0.15; push pace builds AMS 1.8x (was 1.5x).
 - `src/ui/theme.ts`: palette, `climberLook(state)`, `partnerLook(state)`, `statColor`.
 - `src/ui/PackScreen.tsx`: gear packing screen with weights and a "guide's list" button.
 
@@ -87,10 +100,11 @@ See AGENTS.md for Expo rules (use `npx expo install`, check versioned docs).
 
 ## Roadmap (agreed with the owner; plan each phase, wait for OK, then tsc + sim + Expo Go notes)
 - Phase 1 Real movement: DONE (thumbstick, per-step stamina, rest-step rhythm, other teams' headlamps).
-  Sim (2,000 climbs each): smart 58.5% summit / 40.1% retreat / 1.4% fall; legacy one-tap 54.3% / 44.0%;
-  careless 41.6% summit with ~52% bad endings; pusher 62.5% summit (not yet punished enough);
-  cautious 97% retreat. Balancing pusher/careless is proposed, not yet done.
-- Phase 2 Skills you perform (self-arrest swipe, prusik rhythm / Z-pulley, ladder balance).
+- Phase 2 Skills you perform: DONE. Sim (2,000 each): smart 58.2% summit / 40.2% retreat / 1.6% fall;
+  pusher 39.5% summit (was 62.5%); careless 35.5% summit with ~57% bad endings; cautious 97% retreat.
+  `--skill 0.3` vs `0.95`: smart falls 6.1% vs 0.7%, summit 46.7% vs 57.9%. Mini-games tested in a
+  browser harness: prusik steady 1.0 / sloppy 0.18; ladder hands-off 0 / steering 0.8–1.0;
+  self-arrest frozen 0; Z-pulley in order 0.70.
 - Phase 3 Realism (hands/feet frostnip, wet layers, pulse oximeter, seasons, expo-audio sound).
 - Phase 4 Replayability (seeds + daily climb, career mode, routes, skills, partners, badges, modes).
 

@@ -22,6 +22,11 @@ export type Terrain = 'trail' | 'snowfield' | 'gap' | 'cleaver' | 'glacier' | 'u
 export interface Leg {
   /** Minutes going up at a steady pace. */
   minutes: number;
+  /**
+   * Typical fall-line slope on this stretch, degrees: what you'd slide down if you fell.
+   * Approximate, from maps and guide descriptions; it varies a lot with the season's route.
+   */
+  slopeDeg: number;
   terrain: Terrain;
   name: string;
   roped: boolean;
@@ -29,13 +34,13 @@ export interface Leg {
 
 /** LEGS[i] connects NODES[i] and NODES[i + 1]. */
 export const LEGS: Leg[] = [
-  { minutes: 150, terrain: 'trail', name: 'Skyline Trail to Pebble Creek', roped: false },
-  { minutes: 240, terrain: 'snowfield', name: 'Muir Snowfield', roped: false },
-  { minutes: 75, terrain: 'gap', name: 'Cathedral Gap and the Ingraham Glacier', roped: true },
-  { minutes: 120, terrain: 'cleaver', name: 'Disappointment Cleaver', roped: true },
-  { minutes: 75, terrain: 'glacier', name: 'Upper Ingraham Glacier', roped: true },
-  { minutes: 120, terrain: 'upper', name: 'Switchbacks to the crater rim', roped: true },
-  { minutes: 25, terrain: 'crater', name: 'Across the crater', roped: true },
+  { minutes: 150, slopeDeg: 15, terrain: 'trail', name: 'Skyline Trail to Pebble Creek', roped: false },
+  { minutes: 240, slopeDeg: 20, terrain: 'snowfield', name: 'Muir Snowfield', roped: false },
+  { minutes: 75, slopeDeg: 28, terrain: 'gap', name: 'Cathedral Gap and the Ingraham Glacier', roped: true },
+  { minutes: 120, slopeDeg: 32, terrain: 'cleaver', name: 'Disappointment Cleaver', roped: true },
+  { minutes: 75, slopeDeg: 30, terrain: 'glacier', name: 'Upper Ingraham Glacier', roped: true },
+  { minutes: 120, slopeDeg: 33, terrain: 'upper', name: 'Switchbacks to the crater rim', roped: true },
+  { minutes: 25, slopeDeg: 10, terrain: 'crater', name: 'Across the crater', roped: true },
 ];
 
 export const SUMMIT = NODES.length - 1;

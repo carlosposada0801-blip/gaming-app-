@@ -1,12 +1,14 @@
 import { FORECAST_TEXT, crampons, has, roped } from './helpers';
 import { DAY, MUIR, NODES, SUMMIT, isNight, minuteOfDay } from './route';
-import type { Choice, EventDef, GameState, Outcome, Rng } from './types';
+import { arrestOdds, ladderOutcome, prusikOutcome, zpulleyOutcome } from './skills';
+import type { Choice, EventDef, GameState, Outcome, Rng, SkillId } from './types';
 
 const ft = (s: GameState) => NODES[s.node].ft;
 
 /** Rockfall roll shared by Cathedral Gap and the Cleaver. */
 function rockfall(s: GameState, p: number, rng: Rng, base: Outcome): Outcome {
-  if (s.flags.pushedPastTurnaround) p += 0.1;
+  // Late in the day the sun loosens rock frozen in place overnight.
+  if (s.flags.pushedPastTurnaround) p += 0.2;
   if (rng() >= p) return base;
   if (has(s, 'helmet')) {
     return {
@@ -41,10 +43,11 @@ function slide(s: GameState, rng: Rng, arrestOdds: number, soft = false): Outcom
   return { text: 'You can’t stop the slide.', ending: 'fall', tone: 'bad' };
 }
 
-const req = (cond: boolean, label: string, need: string, resolve: Choice['resolve']): Choice => ({
+const req = (cond: boolean, label: string, need: string, resolve: Choice['resolve'], skill?: SkillId): Choice => ({
   label,
   hint: cond ? undefined : `Needs ${need}`,
   disabled: !cond,
+  skill,
   resolve,
 });
 
@@ -285,7 +288,7 @@ export const EVENTS: EventDef[] = [
     title: 'Crevasse fall',
     chance: (s, c) =>
       [2, 4, 5].includes(c.leg)
-        ? 0.12 + (c.dir === 'down' && minuteOfDay(s.clock) > 660 ? 0.15 : 0) + (s.flags.pushedPastTurnaround ? 0.08 : 0)
+        ? 0.12 + (c.dir === 'down' && minuteOfDay(s.clock) > 660 ? 0.15 : 0) + (s.flags.pushedPastTurnaround ? 0.2 : 0)
           // Leaving the boot track means stepping on untested snow bridges.
           + Math.min(0.35, (c.offTrack ?? 0) / 400)
         : 0,
@@ -296,17 +299,17 @@ export const EVENTS: EventDef[] = [
     choices: (s) =>
       roped(s)
         ? [
-            req(has(s, 'rescue_kit'), 'Climb out on your prusiks', 'a crevasse rescue kit', () => ({
+            req(has(s, 'rescue_kit'), 'Climb out on your prusiks', 'a crevasse rescue kit', (_st, _rng, perf) => (perf === undefined ? {
               text: 'Foot loop, waist loop, slide, stand. Twenty minutes of work and you flop over the lip.', minutes: 40, delta: { stamina: -15, warmth: -8 }, tone: 'good',
-            })),
-            req(has(s, 'rescue_kit'), 'Your partner builds a Z-pulley and hauls', 'a crevasse rescue kit', (st) => ({
+            } : prusikOutcome(perf)), 'prusik'),
+            req(has(s, 'rescue_kit'), 'Your partner builds a Z-pulley and hauls', 'a crevasse rescue kit', (st, _rng, perf) => (perf === undefined ? {
               text: has(st, 'picket')
                 ? 'A buried picket for the anchor, a 3:1 haul, and you’re out.'
                 : 'With no picket, your partner builds an anchor from an ice axe. Slow, but it holds.',
               minutes: has(st, 'picket') ? 50 : 75,
               delta: { stamina: -6, warmth: -18 },
               tone: 'good',
-            })),
+            } : zpulleyOutcome(st, perf)), 'zpulley'),
             {
               label: 'Yell for the next rope team',
               resolve: () => ({ text: 'You hang in the cold for an hour and a half until another team arrives with gear to haul you out.', minutes: 100, delta: { warmth: -30, morale: -15 }, tone: 'bad' }),
@@ -328,7 +331,9 @@ export const EVENTS: EventDef[] = [
     chance: (_s, c) => (c.dir === 'up' && c.leg === 4 ? 0.35 : 0),
     text: () => 'Late-season crevasses force the route across aluminum ladders lashed together over a gap, with hand lines fixed on both sides.',
     choices: (s) => [
-      req(has(s, 'harness'), 'Clip into the hand line and walk the rungs', 'a harness', () => ({ text: 'Front points between the rungs, eyes on the far side. Done.', minutes: 10, delta: { morale: 5 }, tone: 'good' })),
+      req(has(s, 'harness'), 'Clip into the hand line and walk the rungs', 'a harness', (_st, _rng, perf) => (perf === undefined
+        ? { text: 'Front points between the rungs, eyes on the far side. Done.', minutes: 10, delta: { morale: 5 }, tone: 'good' }
+        : ladderOutcome(perf)), 'ladder'),
       { label: 'Crawl across on hands and knees', resolve: () => ({ text: 'Ugly but safe.', minutes: 20, delta: { stamina: -5, morale: -3 }, tone: 'info' }) },
     ],
   },
@@ -339,6 +344,8 @@ export const EVENTS: EventDef[] = [
     chance: (s, c) => {
       if (![4, 5].includes(c.leg) || s.usedEvents.filter((e) => e === 'slip').length >= 2) return 0;
       let p = 0.15 + (c.dir === 'down' ? 0.1 : 0);
+      // Afternoon slush balls up under crampons on the way down after a late summit.
+      if (s.flags.pushedPastTurnaround && c.dir === 'down') p += 0.15;
       if (s.flags.cramponsDull) p += 0.2;
       if (!crampons(s)) p += 0.3;
       if (!has(s, 'gaiters')) p += 0.08;
@@ -349,7 +356,8 @@ export const EVENTS: EventDef[] = [
         ? 'Your boot skids on hard, wind-polished snow and you go down, sliding feet-first down the slope.'
         : 'A crampon point snags your loose pant leg and you pitch forward, sliding headfirst.',
     choices: (s) => [
-      req(has(s, 'axe'), 'Self-arrest with your ice axe', 'an ice axe', (st, rng) => slide(st, rng, st.flags.cramponsDull ? 0.75 : 0.88)),
+      req(has(s, 'axe'), 'Self-arrest with your ice axe', 'an ice axe',
+        (st, rng, perf) => slide(st, rng, perf === undefined ? (st.flags.cramponsDull ? 0.75 : 0.88) : arrestOdds(st, perf)), 'arrest'),
       { label: 'Dig in your hands and heels', resolve: (st, rng) => slide({ ...st, packed: st.packed.filter((g) => g !== 'axe') }, rng, 0) },
     ],
   },

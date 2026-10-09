@@ -31,6 +31,8 @@ function mulberry32(seed: number): Rng {
 
 interface Policy {
   name: string;
+  /** Typical skill performance (0..1) in the Phase 2 mini-games; undefined = classic odds. */
+  skill?: number;
   pack: () => string[];
   stride: (s: GameState, rng: Rng) => Stride;
   /** An action id to take before moving, or null. */
@@ -41,15 +43,21 @@ interface Policy {
 
 const enabled = (s: GameState) => eventChoices(s).map((c, i) => (c.disabled ? -1 : i)).filter((i) => i >= 0);
 
+/** A skill performance for this player: their typical level with some spread. */
+function perfFor(p: Policy, s: GameState, i: number, rng: Rng) {
+  if (p.skill === undefined || !eventChoices(s)[i]?.skill) return undefined;
+  return Math.max(0, Math.min(1, p.skill + (rng() + rng() + rng() - 1.5) * 0.25));
+}
+
 /** Smart choice: try each option a few times and keep the one that leaves you best off. */
-function lookahead(s: GameState, rng: Rng) {
+function lookahead(s: GameState, rng: Rng, skill?: number) {
   let best = enabled(s)[0] ?? 0;
   let bestScore = -Infinity;
   for (const i of enabled(s)) {
     let total = 0;
     for (let k = 0; k < 6; k++) {
       const r = mulberry32(Math.floor(rng() * 1e9));
-      const n = chooseEvent(s, i, r);
+      const n = chooseEvent(s, i, r, eventChoices(s)[i]?.skill && skill !== undefined ? skill : undefined);
       const st = n.stats;
       let v = st.stamina + st.warmth + st.hydration + st.energy + st.morale - st.ams * 1.5 - (n.clock - s.clock) * 0.15;
       if (n.ending) v += ENDINGS[n.ending].good ? 300 : -2000;
@@ -116,10 +124,11 @@ const CARELESS_PACK = RECOMMENDED.filter((id) => !['parka', 'glasses', 'sun', 'g
 const POLICIES: Policy[] = [
   {
     name: 'smart',
+    skill: 0.8,
     pack: () => [...RECOMMENDED],
     stride: (_s, rng) => ({ pace: 'steady', rhythm: 0.75 + rng() * 0.2, lateral: 0 }),
     maintain: (s) => (smartTurnBack(s, false) ? 'turnback' : careMaintenance(s, { drink: 55, eat: 55, rest: 60, layers: true })),
-    choose: lookahead,
+    choose: (s, rng) => lookahead(s, rng, POLICIES[0].skill),
   },
   {
     name: 'legacy',
@@ -131,6 +140,7 @@ const POLICIES: Policy[] = [
   },
   {
     name: 'careless',
+    skill: 0.45,
     pack: () => [...CARELESS_PACK],
     stride: (_s, rng) => ({ pace: rng() < 0.5 ? 'push' : 'steady', rhythm: 0.15, lateral: rng() < 0.2 ? 6 : 0 }),
     maintain: (s) => careMaintenance(s, { drink: 15, eat: 15, rest: 12, layers: false }),
@@ -141,6 +151,7 @@ const POLICIES: Policy[] = [
   },
   {
     name: 'pusher',
+    skill: 0.65,
     pack: () => [...RECOMMENDED],
     stride: () => ({ pace: 'push', rhythm: 0.45, lateral: 0 }),
     maintain: (s) => careMaintenance(s, { drink: 35, eat: 35, rest: 25, layers: true }),
@@ -148,6 +159,7 @@ const POLICIES: Policy[] = [
   },
   {
     name: 'cautious',
+    skill: 0.8,
     pack: () => [...RECOMMENDED],
     stride: (_s, rng) => ({ pace: 'steady', rhythm: 0.75 + rng() * 0.2, lateral: 0 }),
     maintain: (s) => (smartTurnBack(s, true) ? 'turnback' : careMaintenance(s, { drink: 55, eat: 55, rest: 60, layers: true })),
@@ -164,7 +176,8 @@ function play(policy: Policy, seed: number) {
   let idle = 0;
   while (!s.ending && guard++ < 50000) {
     if (s.pendingEvent) {
-      s = chooseEvent(s, policy.choose(s, rng), rng);
+      const pick = policy.choose(s, rng);
+      s = chooseEvent(s, pick, rng, perfFor(policy, s, pick, rng));
       continue;
     }
     const act = policy.maintain(s);
@@ -206,6 +219,9 @@ function trace(style: string, seed: number) {
 function main() {
   const t = process.argv.indexOf('--trace');
   if (t > 0) return trace(process.argv[t + 1], Number(process.argv[t + 2] ?? 1000));
+  // --skill X sets every player's mini-game performance (0..1), to see how much skill matters.
+  const sk = process.argv.indexOf('--skill');
+  if (sk > 0) for (const p of POLICIES) if (p.skill !== undefined) p.skill = Number(process.argv[sk + 1]);
   const arg = process.argv.indexOf('--runs');
   const runs = arg > 0 ? Number(process.argv[arg + 1]) : 2000;
   const endings = Object.keys(ENDINGS) as EndingId[];
