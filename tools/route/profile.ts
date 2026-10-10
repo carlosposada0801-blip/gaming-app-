@@ -4,7 +4,7 @@
 // uses the same points (src/scene/terrain.ts buildRoute), so a distance means the same place in both.
 //   npx tsx tools/route/profile.ts
 import { writeFileSync } from 'node:fs';
-import { ROUTE_IDS } from '../../src/game/routes';
+import { ALL_ROUTE_IDS as ROUTE_IDS } from '../../src/game/routes';
 import { buildRoute } from '../../src/scene/terrain';
 
 const r1 = (v: number) => Math.round(v * 10) / 10;

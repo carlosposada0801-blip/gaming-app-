@@ -88,6 +88,16 @@ function caught(s: GameState, rng: Rng): Outcome {
     : { text: 'The slope releases and buries you. With no transceiver, nobody can find you in time.', ending: 'avalanche', tone: 'bad' };
 }
 
+/** What you see from the top of each trip. */
+const SUMMIT_TEXT: Partial<Record<string, string>> = {
+  dc: 'Columbia Crest, 14,411 feet. The highest point in Washington. Mount Adams, Mount Hood, and Mount St. Helens line up to the south. You’re only halfway: most accidents happen on the way down.',
+  si: 'The top of the Haystack, 4,167 feet. North Bend and the Snoqualmie Valley are straight below, Seattle’s towers far to the west, and Rainier floats over the ridges to the south. Down-climbing the Haystack is the tricky part.',
+  muir: 'Camp Muir, 10,188 feet. The stone shelter, the guide hut, a row of tents, and the Cowlitz Glacier at your feet. Most day hikers turn around here. The snowfield below is where whiteouts catch people.',
+  helens: 'The crater rim, about 8,300 feet. Two thousand feet below, the lava dome steams inside the crater blown open in 1980. Rainier, Adams and Hood stand around the horizon. The snow you’re on may be a cornice over nothing.',
+  adams: 'The summit of Mount Adams, 12,276 feet. Rainier to the north, St. Helens and Hood to the west and south. The long snow slope you came up will be a glissade on the way down, once it softens.',
+  baker: 'Grant Peak, 10,781 feet, the top of Mount Baker. The San Juan Islands and the Salish Sea glitter to the west, the North Cascades bristle to the east, and Sherman Crater steams below.',
+};
+
 const req = (cond: boolean, label: string, need: string, resolve: Choice['resolve'], skill?: SkillId): Choice => ({
   label,
   hint: cond ? undefined : `Needs ${need}`,
@@ -126,10 +136,9 @@ export const EVENTS: EventDef[] = [
   },
   {
     id: 'summit',
-    title: 'Columbia Crest',
+    title: 'On top',
     chance: (s) => (s.dir === 'up' && s.node === summitOf(s) ? 1 : 0),
-    text: () =>
-      'Columbia Crest, 14,411 feet. The highest point in Washington. Mount Adams, Mount Hood, and Mount St. Helens line up to the south. You’re only halfway: most accidents happen on the way down.',
+    text: (s) => SUMMIT_TEXT[s.route] ?? SUMMIT_TEXT.dc ?? '',
     choices: () => [
       {
         label: 'Take the photo, then start down',
@@ -416,10 +425,26 @@ export const EVENTS: EventDef[] = [
     choices: (s) => [
       req(has(s, 'axe'), 'Self-arrest with your ice axe', 'an ice axe',
         (st, rng, perf) => slide(st, rng, perf === undefined
-          ? (st.flags.cramponsDull ? 0.75 : 0.88) - (SEASONS[st.season].hardIce ? 0.1 : 0) + 0.02 * st.skills.arrest
+          ? (st.flags.cramponsDull ? 0.75 : 0.88) - (SEASONS[st.season].hardIce ? 0.1 : 0) + 0.02 * st.skills.arrest - (st.flags.noArrest ? 0.35 : 0)
             - (routeOf(st).legs[Math.max(0, st.dir === 'up' ? st.node - 1 : st.node)]?.terrain === 'ice' ? 0.2 : 0)
           : arrestOdds(st, perf)), 'arrest'),
       { label: 'Dig in your hands and heels', resolve: (st, rng) => slide({ ...st, packed: st.packed.filter((g) => g !== 'axe') }, rng, 0) },
+    ],
+  },
+  {
+    id: 'cornice',
+    title: 'Cornice',
+    chance: (s, c) => (c.dir === 'up' && hz(s, c).cornice ? 1 : 0),
+    text: (s) =>
+      `The snow runs flat to the rim, then simply ends. ${s.season === 'may' ? 'In spring the wind builds cornices out over the crater, and from up here you can’t see where the rock stops and the overhang begins.' : 'Most of the spring cornice has melted, but the rim edge is still loose and undercut.'}`,
+    choices: () => [
+      { label: 'Stay well back and look from a safe spot', resolve: () => ({ text: 'You stop well short of the edge. The view is just as good from here.', delta: { morale: 6 }, tone: 'good' }) },
+      {
+        label: 'Walk out to the edge for the view into the crater',
+        resolve: (st, rng) => (rng() < (st.season === 'may' ? 0.12 : 0.03)
+          ? { text: 'With a soft crack the snow under you breaks away into the crater.', ending: 'fall', tone: 'bad' }
+          : { text: 'Your heart hammers as you peer down at the steaming dome. Then you back away, carefully.', delta: { morale: 8 }, tone: 'info' }),
+      },
     ],
   },
   {

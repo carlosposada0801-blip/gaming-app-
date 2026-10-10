@@ -12,7 +12,7 @@ export interface EndingInfo {
 export const ENDINGS: Record<EndingId, EndingInfo> = {
   summit: {
     title: 'Summit and home',
-    body: 'You stood on Columbia Crest and walked back to the trailhead parking lot. That’s the whole climb.',
+    body: 'You stood on top and walked back to the trailhead parking lot. That’s the whole climb.',
     lesson: 'About half the people who attempt Rainier reach the summit. Getting down is the part that counts.',
     good: true,
   },

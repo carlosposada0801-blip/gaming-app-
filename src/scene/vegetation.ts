@@ -3,7 +3,7 @@
 // broadleaf lupine, avalanche lily, and cinquefoil.
 import * as THREE from 'three';
 import type { Instances } from './features';
-import { distToRoute, fbm, sceneSeason, slopeAt, snowCover, surfaceAt, type Grid } from './terrain';
+import { distToRoute, fbm, sceneMountain, sceneSeason, slopeAt, snowCover, surfaceAt, type Grid } from './terrain';
 
 const GRASS_RADIUS = 75;
 
@@ -65,12 +65,13 @@ export function meadowScatter(patch: Grid) {
     grass.matrices.push(m.clone());
     // Late summer: the meadows cure to tan and straw.
     const dry = Math.min(1.3, Math.max(0, fbm(x * 0.02 - 5, z * 0.02 + 4) - 0.5) * 1.6 + thin * 0.4 + sceneSeason.dry);
-    const v = 0.55 + rand() * 0.25;
+    // Forest undergrowth (ferns, salal) is darker than sunlit meadow.
+    const v = (0.55 + rand() * 0.25) * (sceneMountain.id === 'si' ? 0.6 : 1);
     grass.colors.push(new THREE.Color(v * (0.7 + dry * 0.55), v * 0.92, v * (0.6 - dry * 0.15)));
 
     // Wildflowers in drifts.
-    // By September most wildflowers have gone to seed.
-    if (flowers.matrices.length < 2600 && fbm(x * 0.09 + 31, z * 0.09 - 17) > 0.5 && rand() < 0.55 * (1 - sceneSeason.dry * 1.2)) {
+    // By September most wildflowers have gone to seed; under Mount Si's forest there are none.
+    if (sceneMountain.id !== 'si' && flowers.matrices.length < 2600 && fbm(x * 0.09 + 31, z * 0.09 - 17) > 0.5 && rand() < 0.55 * (1 - sceneSeason.dry * 1.2)) {
       let pick = rand() * FLOWER_TOTAL;
       let col = FLOWERS[0];
       for (const f of FLOWERS) {

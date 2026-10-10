@@ -7,7 +7,7 @@ import { Climber, type ClimberLook, type Motion } from './Climber';
 import { crevasseGeometry, rockGeometry, scatter, seracGeometry, treeGeometry, type Instances } from './features';
 import {
   CORE_MESH, FAR, HORIZON, PATCH_HALF, ROUTE, ROUTE_SPACING, SUMMIT_POS, buildPatch, currentPatch, earthDrop, groundColor,
-  inside, nodePosition, routeIndexAt, sceneSeason, setSceneRoute, setSceneSeason, slopeAt, snowCover, surfaceAt, type Grid, type Vec3,
+  inside, nodePosition, routeIndexAt, sceneMountain, sceneSeason, setSceneRoute, setSceneSeason, slopeAt, snowCover, surfaceAt, type Grid, type Vec3,
 } from './terrain';
 import { cloudTexture, detailTextures, grassTexture } from './textures';
 import { flowerGeometry, grassGeometry, meadowScatter, swaying, tickWind } from './vegetation';
@@ -132,7 +132,8 @@ function terrainGeometry(g: Grid, opts: { lower?: (x: number, z: number) => numb
 // season and share between screens.
 const terrainCache = new Map<string, { coreGeo: THREE.BufferGeometry; farGeo: THREE.BufferGeometry; horizonGeo: THREE.BufferGeometry }>();
 function staticTerrain() {
-  const hit = terrainCache.get(sceneSeason.key);
+  const key = `${sceneMountain.id}:${sceneSeason.key}`;
+  const hit = terrainCache.get(key);
   if (hit) return hit;
   const built = {
     coreGeo: terrainGeometry(CORE_MESH),
@@ -140,7 +141,7 @@ function staticTerrain() {
     farGeo: terrainGeometry(FAR, { lower: (x, z) => earthDrop(x, z) + (inside(CORE_MESH, x, z, -400) ? 150 : 0) }),
     horizonGeo: terrainGeometry(HORIZON, { lower: (x, z) => earthDrop(x, z) + (inside(FAR, x, z, -2000) ? 400 : 0) }),
   };
-  terrainCache.set(sceneSeason.key, built);
+  terrainCache.set(key, built);
   return built;
 }
 
@@ -186,7 +187,7 @@ function clipToPatch(mat: THREE.MeshStandardMaterial) {
 }
 
 function StaticTerrain({ season, patch }: { season: string; patch: Grid | null }) {
-  const { coreGeo: core, farGeo: far, horizonGeo: horizon } = useMemo(staticTerrain, [season]);
+  const { coreGeo: core, farGeo: far, horizonGeo: horizon } = useMemo(staticTerrain, [season, sceneMountain.id]);
   const coreBase = useGroundMaterial(3);
   const coreMat = useMemo(() => clipToPatch(coreBase), [coreBase]);
   useEffect(() => {
@@ -1052,9 +1053,11 @@ function World(props: SceneProps) {
       look = new THREE.Vector3(SUMMIT_POS[0], 2700, SUMMIT_POS[2]);
     } else if (c.overview) {
       const yaw = c.yaw + 0.35;
-      const mid = new THREE.Vector3((here.x + SUMMIT_POS[0]) / 2, 0, (here.z + SUMMIT_POS[2]) / 2);
+      // The overview frames the climber and the top of this route.
+      const top = ROUTE.pts[ROUTE.pts.length - 1];
+      const mid = new THREE.Vector3((here.x + top[0]) / 2, 0, (here.z + top[2]) / 2);
       camPos = new THREE.Vector3(mid.x + Math.sin(yaw) * 6500, 4300, mid.z + Math.cos(yaw) * 6500);
-      look = new THREE.Vector3(mid.x, (here.y + SUMMIT_POS[1]) / 2 - 300, mid.z);
+      look = new THREE.Vector3(mid.x, (here.y + top[1]) / 2 - 300, mid.z);
     } else {
       // Over the shoulder at head height, looking along the route, tilted with the slope ahead
       // so the mountain fills the frame above the climber.

@@ -5,6 +5,7 @@ import type {
   ArrivalContext, Forecast, GameState, HandWear, LayerLevel, Mode, Outcome, Pace, Rng, SkillId, SkillLevels, Stats, Weather,
 } from './types';
 import { PARTNERS, partnerLine, type PartnerId } from './partners';
+import type { CareerEffects } from './career';
 import { SEASONS, type Season } from './season';
 import { EVENTS, EVENT_BY_ID } from './events';
 import { ENDINGS } from './endings';
@@ -155,7 +156,9 @@ export function handInsulation(s: GameState) {
 
 /** Insulation on your feet: boots and gaiters. */
 export function feetInsulation(s: GameState) {
-  return s.packed.reduce((t, id) => t + (has(s, id) ? GEAR_BY_ID[id]?.feet ?? 0 : 0), 0);
+  // Worn-out boots leak: wet, cold feet.
+  const boots = s.flags.wornBoots ? 0.7 : 1;
+  return s.packed.reduce((t, id) => t + (has(s, id) ? (GEAR_BY_ID[id]?.feet ?? 0) * (id.startsWith('boots_') ? boots : 1) : 0), 0);
 }
 
 export function coldIndex(s: GameState, ft = currentFt(s), clock = s.clock) {
@@ -307,7 +310,9 @@ const BETTER: Record<Weather, Weather> = {
 };
 
 export function updateWeather(s: GameState, rng: Rng) {
-  const day2 = s.clock >= DAY;
+  // "Summit day": the day after the last night out (the first day on a day trip).
+  const R = routeOf(s);
+  const day2 = R.dayTrip || s.clock >= DAY * (1 + R.bivouacs.length);
   const m = minuteOfDay(s.clock);
   let worsen = 0.05;
   let improve = 0.35;
@@ -344,6 +349,8 @@ export interface NewGameOptions {
   partner?: PartnerId;
   mode?: Mode;
   skills?: SkillLevels;
+  /** Career mode: training and the state of your gear. */
+  career?: CareerEffects;
 }
 
 /** Gear a guide service rents you if you show up without it. */
@@ -386,11 +393,12 @@ export function newGame(packedIn: string[], opts: NewGameOptions = {}): GameStat
     rngState: holder.rngState,
     skillLog: [],
     partnerSays: null,
+    fitness: opts.career?.fitness ?? 0,
     packed,
     stats: { stamina: 100, warmth: 90, hydration: 85, energy: 85, ams: 0, morale: 75 },
     node: 0,
     dir: 'up',
-    clock: START_CLOCK,
+    clock: ROUTES[route].startClock ?? START_CLOCK,
     weather: 'clear',
     forecast,
     layer: 0,
@@ -401,7 +409,8 @@ export function newGame(packedIn: string[], opts: NewGameOptions = {}): GameStat
     water: packed.includes('water') ? 3 : 0,
     // Summit food is about two days' worth; you pack more for each extra night out.
     food: packed.includes('food') ? 6 + 3 * ROUTES[route].bivouacs.length : 0,
-    slept: false,
+    // A day trip has no night out: you start rested at the trailhead.
+    slept: !!ROUTES[route].dayTrip,
     bivied: [],
     campLeft: false,
     turnaround: ROUTES[route].turnaround, // 10:00 AM on summit day on the Cleaver
@@ -413,7 +422,7 @@ export function newGame(packedIn: string[], opts: NewGameOptions = {}): GameStat
     summited: false,
     flags: {},
     usedEvents: [],
-    pendingEvent: 'ranger',
+    pendingEvent: route === 'si' ? null : 'ranger',
     lastOutcome: null,
     ending: null,
     log: [],
@@ -422,10 +431,15 @@ export function newGame(packedIn: string[], opts: NewGameOptions = {}): GameStat
     prevNode: 0,
     dist: 0,
     lateral: 0,
-    legStart: START_CLOCK,
+    legStart: ROUTES[route].startClock ?? START_CLOCK,
     legOffTrack: 0,
   };
   if (!opts.rng) s.rngState = holder.rngState;
+  const ce = opts.career;
+  if (ce?.dullCrampons) { s.flags.cramponsDull = true; log(s, 'Your crampons are worn and dull. Sharpen or replace them soon.', 'bad'); }
+  if (ce?.wornBoots) { s.flags.wornBoots = true; log(s, 'Your old boots leak at the seams. Cold feet ahead.', 'bad'); }
+  if (ce?.newBoots) { s.flags.newBoots = true; log(s, 'Brand-new boots, still stiff. Expect blisters on the first trip.', 'info'); }
+  if (ce?.noArrest) s.flags.noArrest = true;
   log(s, `${ROUTES[route].nodes[0].name} in ${SEASONS[season].label}, ${formatClock(s.clock)}. ${ROUTES[route].name} with ${partner.name}. Seed ${seed}. Pack weight ${packWeightLb(packed)} lb.`, 'info');
   if (rented.length) log(s, `Your guide checks your pack and rents you: ${rented.join(', ')}.`, 'info');
   return s;
@@ -447,7 +461,7 @@ export function legIndex(s: GameState) {
 export function needsCrampons(s: GameState, i: number) {
   const R = routeOf(s);
   const leg = R.legs[i];
-  return !!leg && (i >= R.camp || leg.terrain === 'glacier' || leg.terrain === 'ice');
+  return !!leg && (leg.crampons ?? (i >= R.camp || leg.terrain === 'glacier' || leg.terrain === 'ice'));
 }
 
 export function legMinutes(s: GameState, pace: Pace, i = legIndex(s)) {
@@ -842,7 +856,9 @@ export function chooseEvent(prev: GameState, index: number, rngIn?: Rng, perf?: 
   const def = EVENT_BY_ID[prev.pendingEvent];
   const choice = def.choices(s)[index];
   if (!choice || choice.disabled) return prev;
-  const p = perf === undefined || !choice.skill ? perf : perf * skillHandicap(s, choice.skill);
+  // Without snow school there is no practiced self-arrest: it's down to luck.
+  const untrained = choice.skill === 'arrest' && s.flags.noArrest;
+  const p = untrained ? undefined : perf === undefined || !choice.skill ? perf : perf * skillHandicap(s, choice.skill);
   const outcome: Outcome = choice.resolve(s, rng, p === undefined ? undefined : Math.max(0, Math.min(1, p)));
   if (choice.skill && p !== undefined) s.skillLog.push({ skill: choice.skill, perf: Math.max(0, Math.min(1, p)) });
   // Rope work in the snow chills your hands, less so in mittens.

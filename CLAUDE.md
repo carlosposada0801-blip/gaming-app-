@@ -4,7 +4,8 @@ A 3D mountaineering survival game for phones (Expo / React Native, TypeScript).
 The player plans a climb (route, season, partner, mode, seed), packs real climbing gear, then
 climbs Mount Rainier to Columbia Crest (14,411 ft) and back by the Disappointment Cleaver,
 Emmons-Winthrop, Kautz Glacier or Liberty Ridge, managing stamina, warmth, hands and feet, water,
-food, altitude sickness, morale, weather and time.
+food, altitude sickness, morale, weather and time. Career mode works up to Rainier from Mount Si,
+a Camp Muir day hike, snow school, Mount St. Helens, Mount Adams and Mount Baker.
 
 See AGENTS.md for Expo rules (use `npx expo install`, check versioned docs).
 
@@ -136,6 +137,25 @@ See AGENTS.md for Expo rules (use `npx expo install`, check versioned docs).
   - Screens: Title (Plan a climb, Daily Climb, Logbook), `PlanScreen` (route, season, mode, partner, seed),
     `PackScreen` (shows the plan; guide's list per season and route), `LogbookScreen`, debrief with photo,
     new badges and level-ups.
+- Phase 4b career:
+  - Mountains: `tools/dem/volcanoes.py` writes `src/scene/data/dem_<helens|adams|baker|si>.ts` (core, 90 km far,
+    350 km horizon, same encoding as Rainier). `terrain.ts` swaps grids with `setSceneMountain` (CORE_MESH, FAR,
+    HORIZON are holders whose contents change; DEMs are required lazily). `RouteDef.mountain`; buildRoute and
+    setSceneRoute set the mountain. Waypoints for the career routes are in `tools/route/waypoints.ts`
+    (Mount Si coordinates were found by searching the DEM; elevations snapped).
+  - Career routes in `routes.ts`: `si` (day hike, forest), `muir` (DC to Camp Muir, day), `helens` (Monitor Ridge,
+    day, spring, cornice event), `adams` (South Spur, Lunch Counter camp), `baker` (Easton Glacier). `dayTrip`,
+    `startClock`, `list` (trip's own guide's list), `Leg.crampons`. Summit text per route in events.ts.
+    Mount Si's scene is dense tall forest with dark undergrowth and no meadow flowers.
+  - `src/game/career.ts`: trip ladder (Si, Muir, snow school, Helens, Adams, Baker, Rainier), approximate prices
+    (buy / rent per trip), fees and travel, starter kit, $600 start, work a week +$450, gear wear (crampons dull,
+    boots leak at 70%, a rope that held a fall is retired, new boots give blisters), fitness from Mount Si,
+    no self-arrest skill before snow school (dice only, -0.35 odds). `finishTrip` pays, wears, progresses;
+    a bad ending costs $300. Career lives in `Profile.career`.
+  - UI: `CareerScreen` (hub, ladder, partner / Rainier route and season), `PackScreen` career mode (owned with
+    wear, Buy / Rent buttons, trip money), `SnowSchoolScreen` (three self-arrest drills, pass at 55% average,
+    +3 self-arrest XP), debrief career notes, Title "Career" button. Badges: Snow school, Trailhead to summit.
+  - Sim: `npm run sim -- --career` plays whole careers (buy cheap, rent expensive, work when short).
 - `src/ui/theme.ts`: palette, `climberLook(state)`, `partnerLook(state)`, `statColor`.
 - `src/ui/PackScreen.tsx`: gear packing screen with weights and a "guide's list" button.
 
@@ -174,8 +194,10 @@ See AGENTS.md for Expo rules (use `npx expo install`, check versioned docs).
   Jordan 80.8%, with Riley 67.6% (Riley's falls and altitude). Careless 0-28% summit, 54-98% bad endings.
   Smart got stronger in 4a (lookahead now values progress, Ash gets altitude sickness less).
   `--route all`, `--partner veteran|friend|firstTimer`.
-- Phase 4b Career mode (planned): training hikes (Mt. Si, Camp Muir day hike), snow school (unlocks
-  self-arrest), Mount St. Helens, Adams, Baker (each needs its own terrain data), money, shop, gear wear.
+- Phase 4b Career mode: DONE. Sim (smart, 1,000 each): Si 97% top, Muir hike 100%, St. Helens (May) 84.5%
+  summit / 2.4% fall, Adams 93.8% / 3.0% fall, Baker 92.7% / 0.3% fall; careless 63-100% top but 10-31% bad
+  endings (lost on Muir, Helens and Adams, exhausted on Baker). Careers (500): 100% reach Rainier's summit,
+  7.6 trips, 6.4 weeks of work, 0.08 bad endings per career. DC unchanged (smart July 86.5%).
 
 ## Still to do
 1. Test on a real phone with Expo Go (`npx expo start`) and tune touch/camera feel.

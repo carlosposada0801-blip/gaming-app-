@@ -23,6 +23,8 @@ npm run sim -- --season may                       # one season: may | july | sep
 npm run sim -- --trace smart 1001 --season july   # one climb's field notes
 npm run sim -- --route all --season july          # every route (dc | emmons | kautz | liberty)
 npm run sim -- --partner friend                   # veteran | friend | firstTimer
+npm run sim -- --route helens --season may        # career routes: si | muir | helens | adams | baker
+npm run sim -- --career                           # whole careers, Mount Si to Rainier
 ```
 
 ## Put it on the App Store
@@ -41,8 +43,12 @@ See `CLAUDE.md` for how the game is put together.
 
 ## Credits
 
-Terrain is the real Mount Rainier: elevation data from AWS Terrain Tiles (Terrarium), derived from
-USGS 3DEP and SRTM. See `tools/dem/` to regenerate it.
+Terrain is the real Mount Rainier, Mount St. Helens, Mount Adams, Mount Baker and Mount Si: elevation
+data from AWS Terrain Tiles (Terrarium), derived from USGS 3DEP and SRTM. See `tools/dem/` to
+regenerate it (`fetch.py` / `process.py` / `export.py` for Rainier, `volcanoes.py` for the others).
+
+Career prices, rentals and permit fees are rough real-world figures and change often; they are a
+game's approximation, not a guide to what a trip costs.
 
 Sound effects (wind, gusts, breathing, crampons on snow and rock, boots on the trail, carabiner
 clinks, rope) are synthesized from noise and sine waves by `tools/audio/generate.ts`

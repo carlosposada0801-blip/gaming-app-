@@ -3,6 +3,7 @@
 import { ENDINGS, computeScore } from './endings';
 import { routeOf } from './helpers';
 import type { RouteId } from './routes';
+import type { Career } from './career';
 import type { GameState, Mode, PartnerId, Season, SkillLevels } from './types';
 
 export interface LogbookEntry {
@@ -32,6 +33,8 @@ export interface Profile {
   daily: Record<string, number>;
   /** Hardcore: safe returns in a row, and the best run. A bad ending resets the run. */
   hardcore: { streak: number; best: number };
+  /** Career mode, once started. */
+  career: Career | null;
 }
 
 export const EMPTY_PROFILE: Profile = {
@@ -40,6 +43,7 @@ export const EMPTY_PROFILE: Profile = {
   badges: [],
   daily: {},
   hardcore: { streak: 0, best: 0 },
+  career: null,
 };
 
 export const SKILL_NAMES: Record<keyof SkillLevels, { name: string; what: string }> = {
@@ -106,7 +110,7 @@ export interface Badge {
 
 export const BADGES: Badge[] = [
   { id: 'home', name: 'Home safe', how: 'Walk back into the trailhead parking lot.' },
-  { id: 'summit', name: 'Columbia Crest', how: 'Stand on the summit and get home.' },
+  { id: 'summit', name: 'Columbia Crest', how: 'Stand on the summit of Rainier and get home.' },
   { id: 'good_call', name: 'Good call', how: 'Turn back for the right reason.' },
   { id: 'arrest', name: 'Pick in, toes in', how: 'A textbook self-arrest.' },
   { id: 'rescue', name: 'Out of the slot', how: 'Climb or haul out of a crevasse.' },
@@ -124,6 +128,8 @@ export const BADGES: Badge[] = [
   { id: 'hardcore', name: 'One life', how: 'Summit and get home in hardcore mode.' },
   { id: 'streak', name: 'Old climber', how: 'Five safe returns in a row in hardcore mode.' },
   { id: 'friends', name: 'Rope team', how: 'Climb with all three partners.' },
+  { id: 'school', name: 'Snow school', how: 'Pass snow school in career mode.' },
+  { id: 'career', name: 'Trailhead to summit', how: 'Climb Rainier at the end of a career.' },
 ];
 
 export interface ClimbResult {
@@ -135,7 +141,11 @@ export interface ClimbResult {
 }
 
 /** Adds a finished climb to the profile. */
-export function recordClimb(prev: Profile, s: GameState, extra: { daily: boolean; highFt: number; photo?: string; now?: Date }): ClimbResult {
+export function recordClimb(
+  prev: Profile,
+  s: GameState,
+  extra: { daily: boolean; highFt: number; photo?: string; now?: Date; badges?: string[] },
+): ClimbResult {
   const good = !!s.ending && ENDINGS[s.ending].good;
   const now = extra.now ?? new Date();
   const entry: LogbookEntry = {
@@ -162,6 +172,7 @@ export function recordClimb(prev: Profile, s: GameState, extra: { daily: boolean
     badges: [...prev.badges],
     daily: { ...prev.daily },
     hardcore: { ...prev.hardcore },
+    career: prev.career,
   };
   if (extra.daily) {
     const day = s.seed.replace(/^DAILY-/, '');
@@ -200,6 +211,7 @@ export function recordClimb(prev: Profile, s: GameState, extra: { daily: boolean
     streak: profile.hardcore.streak >= 5,
     friends: (['veteran', 'friend', 'firstTimer'] as PartnerId[]).every((p) => profile.log.some((e) => e.partner === p)),
   };
+  for (const id of extra.badges ?? []) earned[id] = true;
   const newBadges = BADGES.filter((b) => earned[b.id] && !profile.badges.includes(b.id));
   profile.badges.push(...newBadges.map((b) => b.id));
   return { profile, entry, newBadges, levelUps };

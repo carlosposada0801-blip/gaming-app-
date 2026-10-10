@@ -152,7 +152,10 @@ export const RECOMMENDED = GEAR.filter((g) => g.recommended).map((g) => g.id);
 
 /** A guide's list for the season and route: the summer list plus seasonal and route extras. */
 export function recommendedFor(season: Season, route: RouteId = 'dc'): string[] {
-  return [...new Set([...RECOMMENDED, ...SEASONS[season].extraGear, ...ROUTES[route].extraGear])];
+  const r = ROUTES[route];
+  // Career trips have their own lists; spring adds snowshoes only where there's deep snow to cross.
+  if (r.list) return [...r.list];
+  return [...new Set([...RECOMMENDED, ...SEASONS[season].extraGear, ...r.extraGear])];
 }
 
 export function packWeightLb(ids: string[], leftCampGear = false): number {

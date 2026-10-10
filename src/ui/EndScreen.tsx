@@ -17,6 +17,7 @@ export function EndScreen({
   best,
   newBest,
   result,
+  careerNotes,
   onAgain,
   onReplay,
   onTitle,
@@ -27,6 +28,8 @@ export function EndScreen({
   newBest: boolean;
   /** Badges and level-ups from this climb (null while saving). */
   result: ClimbResult | null;
+  /** Career: money spent, gear worn out, progress. */
+  careerNotes?: string[];
   onAgain: () => void;
   /** Climb the same seed again. */
   onReplay: () => void;
@@ -58,6 +61,13 @@ export function EndScreen({
         <Text style={styles.title}>{ending.title}</Text>
         <Text style={styles.body}>{ending.body}</Text>
         {photo ? <Image source={{ uri: photo }} style={styles.photo} accessibilityLabel="Your summit photo" /> : null}
+
+        {careerNotes?.length ? (
+          <View style={styles.lesson}>
+            <Text style={styles.section}>CAREER</Text>
+            {careerNotes.map((n) => <Text key={n} style={styles.earnedText}>{n}</Text>)}
+          </View>
+        ) : null}
 
         {result && (result.newBadges.length > 0 || result.levelUps.length > 0) ? (
           <View style={styles.earned}>

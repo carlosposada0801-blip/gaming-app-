@@ -6,7 +6,7 @@
 //   CORE  22 km square, 28.6 m data rendered as a 57 m mesh (the mountain).
 //   PATCH a 1.6 km square around the climber at 6.5 m with added relief (rocks, rolls in the
 //         snow), rebuilt as the climber moves. It sits on the core mesh exactly at its edges.
-import { ROUTES, type RouteId } from '../game/routes';
+import { ROUTES, type MountainId, type RouteId } from '../game/routes';
 import { ROUTE_WAYPOINTS } from './data/routeWaypoints';
 import {
   CORE_B64, CORE_HALF, CORE_N, FAR_B64, FAR_HALF, FAR_N, HORIZON_B64, HORIZON_HALF, HORIZON_N, WAYPOINTS,
@@ -87,26 +87,85 @@ export interface Grid {
 
 const grid = (h: Float32Array, n: number, half: number, cx = 0, cz = 0): Grid => ({ cx, cz, half, n, step: (2 * half) / (n - 1), h });
 
-const CORE_DATA = grid(decodeHeights(CORE_B64, CORE_N), CORE_N, CORE_HALF);
-export const FAR = grid(decodeHeights(FAR_B64, FAR_N), FAR_N, FAR_HALF);
-/** 350 km of the Cascades: Adams, St. Helens, Hood and Glacier Peak on the horizon. */
-export const HORIZON = grid(decodeHeights(HORIZON_B64, HORIZON_N), HORIZON_N, HORIZON_HALF);
+/** The core terrain mesh: every second data sample. */
+function meshOf(core: Grid): Grid {
+  const n = (core.n - 1) / 2 + 1;
+  const h = new Float32Array(n * n);
+  for (let r = 0; r < n; r++) for (let c = 0; c < n; c++) h[r * n + c] = core.h[2 * r * core.n + 2 * c];
+  return grid(h, n, core.half);
+}
+
+export type { MountainId };
+
+interface DemModule {
+  CORE_HALF: number; CORE_N: number; FAR_HALF: number; FAR_N: number; HORIZON_HALF: number; HORIZON_N: number;
+  CORE_B64: string; FAR_B64: string; HORIZON_B64: string;
+}
+
+/** Elevation data for each mountain, loaded (and decoded) the first time it is shown. */
+const DEMS: Record<MountainId, () => DemModule> = {
+  rainier: () => ({ CORE_HALF, CORE_N, FAR_HALF, FAR_N, HORIZON_HALF, HORIZON_N, CORE_B64, FAR_B64, HORIZON_B64 }),
+  helens: () => require('./data/dem_helens'),
+  adams: () => require('./data/dem_adams'),
+  baker: () => require('./data/dem_baker'),
+  si: () => require('./data/dem_si'),
+};
+
+interface MountainGrids { core: Grid; mesh: Grid; far: Grid; horizon: Grid }
+const loaded = new Map<MountainId, MountainGrids>();
+
+function load(id: MountainId): MountainGrids {
+  let m = loaded.get(id);
+  if (!m) {
+    const d = DEMS[id]();
+    const core = grid(decodeHeights(d.CORE_B64, d.CORE_N), d.CORE_N, d.CORE_HALF);
+    m = {
+      core,
+      mesh: meshOf(core),
+      far: grid(decodeHeights(d.FAR_B64, d.FAR_N), d.FAR_N, d.FAR_HALF),
+      horizon: grid(decodeHeights(d.HORIZON_B64, d.HORIZON_N), d.HORIZON_N, d.HORIZON_HALF),
+    };
+    loaded.set(id, m);
+  }
+  return m;
+}
+
+const first = load('rainier');
+// These objects stay the same; `setSceneMountain` swaps their contents.
+const CORE_DATA: Grid = { ...first.core };
+/** The core terrain mesh: every second data sample (57 m on Rainier). */
+export const CORE_MESH: Grid = { ...first.mesh };
+export const FAR: Grid = { ...first.far };
+/** 350 km of the Cascades on the horizon. */
+export const HORIZON: Grid = { ...first.horizon };
+/** The mountain shown, and roughly where its summit is (for the Earth's curve). */
+export const sceneMountain = { id: 'rainier' as MountainId, peakX: 1000, peakZ: -1000 };
+
+export function setSceneMountain(id: MountainId) {
+  if (sceneMountain.id === id) return;
+  const m = load(id);
+  Object.assign(CORE_DATA, m.core);
+  Object.assign(CORE_MESH, m.mesh);
+  Object.assign(FAR, m.far);
+  Object.assign(HORIZON, m.horizon);
+  sceneMountain.id = id;
+  // The highest core sample stands in for the summit.
+  let best = -1;
+  let bi = 0;
+  for (let i = 0; i < m.core.h.length; i++) if (m.core.h[i] > best) [best, bi] = [m.core.h[i], i];
+  sceneMountain.peakX = -m.core.half + (bi % m.core.n) * m.core.step;
+  sceneMountain.peakZ = -m.core.half + Math.floor(bi / m.core.n) * m.core.step;
+  if (id === 'rainier') [sceneMountain.peakX, sceneMountain.peakZ] = [1000, -1000];
+  patch = null;
+}
 
 const EARTH_R = 6371000;
 /** How far the Earth's surface has dropped below the horizontal at this distance from the mountain. */
 export function earthDrop(x: number, z: number) {
-  const dx = x - 1000;
-  const dz = z + 1000;
+  const dx = x - sceneMountain.peakX;
+  const dz = z - sceneMountain.peakZ;
   return (dx * dx + dz * dz) / (2 * EARTH_R);
 }
-
-/** The core terrain mesh: every second data sample (57 m). */
-export const CORE_MESH: Grid = (() => {
-  const n = (CORE_N - 1) / 2 + 1;
-  const h = new Float32Array(n * n);
-  for (let r = 0; r < n; r++) for (let c = 0; c < n; c++) h[r * n + c] = CORE_DATA.h[2 * r * CORE_N + 2 * c];
-  return grid(h, n, CORE_HALF);
-})();
 
 export function inside(g: Grid, x: number, z: number, margin = 0) {
   return Math.abs(x - g.cx) <= g.half - margin && Math.abs(z - g.cz) <= g.half - margin;
@@ -172,7 +231,12 @@ const SWITCHBACK: Record<string, number> = {
   'Black Pyramid': 8,
 };
 
-const WAYPOINTS_BY_ROUTE: Record<RouteId, { name: string; x: number; z: number }[]> = { dc: WAYPOINTS, ...ROUTE_WAYPOINTS };
+const WAYPOINTS_BY_ROUTE = {
+  dc: WAYPOINTS,
+  // The Camp Muir day hike is the Cleaver route as far as Camp Muir.
+  muir: WAYPOINTS.slice(0, WAYPOINTS.findIndex((w) => w.name === 'Camp Muir') + 1),
+  ...ROUTE_WAYPOINTS,
+} as unknown as Record<RouteId, { name: string; x: number; z: number }[]>;
 
 export interface RoutePath {
   id: RouteId;
@@ -185,6 +249,7 @@ export interface RoutePath {
 
 /** Builds the walked line for a route: waypoints joined every ~6 m, with switchbacks on the steeps. */
 export function buildRoute(id: RouteId): RoutePath {
+  setSceneMountain(ROUTES[id].mountain);
   const pts: Vec3[] = [];
   const names = ROUTES[id].nodes.map((n) => n.name);
   const nodeIndex: number[] = new Array(names.length).fill(0);
@@ -237,6 +302,7 @@ function hashRoute() {
 hashRoute();
 
 export function setSceneRoute(id: RouteId) {
+  setSceneMountain(ROUTES[id].mountain);
   if (ROUTE.id === id) return;
   let r = built.get(id);
   if (!r) {

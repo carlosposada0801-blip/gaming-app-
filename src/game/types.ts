@@ -73,6 +73,10 @@ export interface Flags {
   partnerDown?: boolean;
   /** Your partner was hurt (rockfall without a helmet). */
   partnerHurt?: boolean;
+  /** Career: leaky old boots, stiff new boots, no snow school yet. */
+  wornBoots?: boolean;
+  newBoots?: boolean;
+  noArrest?: boolean;
 }
 
 export interface GameState {
@@ -89,6 +93,8 @@ export interface GameState {
   skillLog: { skill: SkillId; perf: number }[];
   /** The last thing your partner said, if anything new. */
   partnerSays: string | null;
+  /** Career training (Mount Si), 0..3: each level makes steps a little cheaper. */
+  fitness: number;
   packed: string[];
   stats: Stats;
   /** Index into the route's nodes: the stop the climber is at or last left. */

@@ -30,6 +30,8 @@ export interface Hazards {
   glissade?: boolean;
   /** Chance of a rockfall event going up and coming down. */
   rockfall?: [number, number];
+  /** A corniced rim where the edge can break off (Mount St. Helens in spring). */
+  cornice?: boolean;
   /** A loose rock rib walked in crampons (Disappointment Cleaver). */
   cleaver?: boolean;
   crevasse?: boolean;
@@ -61,6 +63,8 @@ export interface Leg {
   roped: boolean;
   /** How far you can stray from the boot track (m). */
   corridor: number;
+  /** Whether crampons are needed here; by default above high camp and on glaciers and ice. */
+  crampons?: boolean;
   hazards: Hazards;
 }
 

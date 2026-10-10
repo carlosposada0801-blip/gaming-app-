@@ -2,7 +2,7 @@
 // rocks on bare and steep ground, seracs and crevasses on glaciers, never on the boot track.
 import * as THREE from 'three';
 import {
-  distToRoute, fbm, glacierness, slopeAt, snowCover, surfaceAt, type Grid,
+  distToRoute, fbm, glacierness, sceneMountain, slopeAt, snowCover, surfaceAt, type Grid,
 } from './terrain';
 
 export interface Instances {
@@ -44,7 +44,9 @@ export function scatter(patch: Grid) {
   const q = new THREE.Quaternion();
   const m = new THREE.Matrix4();
 
-  for (let i = 0; i < 3200; i++) {
+  // Mount Si's trail climbs through tall, dense Douglas-fir and hemlock forest, not open meadow.
+  const lowForest = sceneMountain.id === 'si';
+  for (let i = 0; i < (lowForest ? 6000 : 3200); i++) {
     const x = patch.cx + (rand() * 2 - 1) * span;
     const z = patch.cz + (rand() * 2 - 1) * span;
     const track = distToRoute(x, z);
@@ -56,9 +58,9 @@ export function scatter(patch: Grid) {
 
     // Subalpine fir and mountain hemlock in clumps across the Paradise meadows.
     // Trees grow where the ground melts out in summer, and stand above the spring snow.
-    if (trees.matrices.length < 1400 && y < 1950 && snowCover(x, y, z, s.deg, s.north, 0) < 0.3 && s.deg < 34 && track > 5
+    if (trees.matrices.length < (lowForest ? 2600 : 1400) && y < 1950 && snowCover(x, y, z, s.deg, s.north, 0) < 0.3 && s.deg < (lowForest ? 45 : 34) && track > (lowForest ? 3.5 : 5)
       && fbm(x * 0.012 + 7, z * 0.012 - 3) > 0.52 - (1750 - y) / 1500 && rand() < 0.95) {
-      const hgt = (5 + rand() * 12) * (1 - smooth01((y - 1700) / 250) * 0.55);
+      const hgt = lowForest && y < 1150 ? 25 + rand() * 30 : (5 + rand() * 12) * (1 - smooth01((y - 1700) / 250) * 0.55);
       q.setFromEuler(new THREE.Euler(0, rand() * Math.PI * 2, 0));
       m.compose(new THREE.Vector3(x, y - 0.2, z), q, new THREE.Vector3(hgt * (0.85 + rand() * 0.3), hgt, hgt * (0.85 + rand() * 0.3)));
       trees.matrices.push(m.clone());

@@ -107,7 +107,7 @@ export function ClimbScreen({
   useEffect(() => {
     if (state.pendingEvent) fire(Haptics.notificationAsync(Haptics.NotificationFeedbackType.Warning));
     // A slip gives no time to read a menu: if you carry an axe, the self-arrest starts at once.
-    if (state.pendingEvent === 'slip') {
+    if (state.pendingEvent === 'slip' && !state.flags.noArrest) {
       const i = eventChoices(state).findIndex((c) => c.skill === 'arrest' && !c.disabled);
       if (i >= 0) setSkillRun({ index: i, skill: 'arrest' });
     }
@@ -519,7 +519,9 @@ export function ClimbScreen({
                   <Pressable
                     key={i}
                     disabled={ch.disabled}
-                    onPress={() => (ch.skill ? setSkillRun({ index: i, skill: ch.skill }) : commit(chooseEvent(state, i)))}
+                    onPress={() => (ch.skill && !(ch.skill === 'arrest' && state.flags.noArrest)
+                      ? setSkillRun({ index: i, skill: ch.skill })
+                      : commit(chooseEvent(state, i)))}
                     style={({ pressed }) => [styles.row, ch.disabled && { opacity: 0.45 }, pressed && { backgroundColor: C.line }]}
                     accessibilityRole="button"
                     accessibilityState={{ disabled: !!ch.disabled }}

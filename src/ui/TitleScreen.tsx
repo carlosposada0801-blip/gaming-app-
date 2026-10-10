@@ -17,6 +17,8 @@ export function TitleScreen({
   onStart,
   onDaily,
   onLogbook,
+  onCareer,
+  careerStarted,
 }: {
   best: Best | null;
   /** Today's Daily Climb score, if you've played it. */
@@ -24,6 +26,9 @@ export function TitleScreen({
   onStart: () => void;
   onDaily: () => void;
   onLogbook: () => void;
+  onCareer: () => void;
+  /** Whether a career is under way (button says Continue). */
+  careerStarted?: boolean;
 }) {
   const daily = useMemo(() => dailyClimb(), []);
   const insets = useSafeAreaInsets();
@@ -81,9 +86,13 @@ export function TitleScreen({
               {SEASONS[daily.season].label} · with {PARTNERS[daily.partner].name}{dailyScore !== undefined ? ` · ${dailyScore}` : ''}
             </Text>
           </Pressable>
+          <Pressable style={styles.secondary} onPress={onCareer} accessibilityRole="button">
+            <Text style={styles.secondaryText}>Career</Text>
+            <Text style={styles.secondarySub}>{careerStarted ? 'Continue' : 'Mt. Si to Rainier'}</Text>
+          </Pressable>
           <Pressable style={styles.secondary} onPress={onLogbook} accessibilityRole="button">
             <Text style={styles.secondaryText}>Logbook</Text>
-            <Text style={styles.secondarySub}>Skills, badges, photos</Text>
+            <Text style={styles.secondarySub}>Badges, photos</Text>
           </Pressable>
         </View>
         <Text style={styles.credits}>

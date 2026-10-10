@@ -98,7 +98,7 @@ export function walkMut(s: GameState, meters: number, stride: Stride, rng: Rng =
   const nodeDist = profileOf(s).nodeDist;
   if (s.dir === 'up' && s.node === summitOf(s) && meters > 0) {
     s.dir = 'down';
-    log(s, 'Starting down from Columbia Crest.', 'info');
+    log(s, `Starting down from ${R.nodes[s.node].name}.`, 'info');
   }
   if (!canMove(s).ok) return 0;
   const target = targetNode(s);
@@ -145,6 +145,8 @@ export function walkMut(s: GameState, meters: number, stride: Stride, rng: Rng =
   if (leg.terrain !== 'trail' && has(s, 'boots_hiking')) cost *= 1.12;
   if (s.weather === 'storm' || s.weather === 'whiteout') cost *= 1.2;
   if (offTrack) cost *= 1.3; // post-holing in untracked snow
+  cost *= 1 - 0.04 * (s.fitness ?? 0); // training pays off
+  if (s.flags.newBoots) cost *= 1.05; // blisters
   if (i < R.camp && SEASONS[s.season].softSnow && !has(s, 'snowshoes')) cost *= 1.2; // spring: sinking in
   if (s.flags.frostbiteFeet) cost *= 1.15;
   if (restStepActive(s) && forward * (d1 - d0) > 0) cost *= 1.15 - 0.4 * Math.max(0, Math.min(1, stride.rhythm));

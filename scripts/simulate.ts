@@ -23,6 +23,7 @@ import { formatClock, isNight } from '../src/game/route';
 import { ROUTES, ROUTE_IDS, type RouteId } from '../src/game/routes';
 import { routeOf, summitOf } from '../src/game/helpers';
 import type { PartnerId } from '../src/game/partners';
+import { CONSUMABLES, PRICES, SCHOOL_PASS, buy, effectsFor, finishTrip, newCareer, nextTrip, rentalCost, tripCost, work, type CareerEffects } from '../src/game/career';
 import type { EndingId, GameState, Rng } from '../src/game/types';
 
 function mulberry32(seed: number): Rng {
@@ -208,9 +209,9 @@ const POLICIES: Policy[] = [
 const CHUNK_M = 40;
 let partnerArg: PartnerId = 'veteran';
 
-function play(policy: Policy, seed: number, season: Season, route: RouteId = 'dc') {
+function play(policy: Policy, seed: number, season: Season, route: RouteId = 'dc', over?: { pack: string[]; career: CareerEffects }) {
   const rng = mulberry32(seed);
-  let s = newGame(policy.pack(season, route), { rng, season, route, partner: partnerArg });
+  let s = newGame(over?.pack ?? policy.pack(season, route), { rng, season, route, partner: partnerArg, career: over?.career });
   let guard = 0;
   let idle = 0;
   while (!s.ending && guard++ < 50000) {
@@ -255,7 +256,77 @@ function trace(style: string, seed: number, season: Season, route: RouteId) {
   console.log(`\nEnding: ${s.ending}  stats: ${JSON.stringify(s.stats)}  hands ${Math.round(s.handTemp)} feet ${Math.round(s.footTemp)} wet ${Math.round(s.wet)}`);
 }
 
+// ---------- career ----------
+
+/**
+ * Plays a whole career with the smart player: work when short of money, buy cheap gear and rent the
+ * expensive pieces at first (buying once there is money to spare), retry failed trips.
+ */
+function careerRun(seed: number, policy: Policy) {
+  const rng = mulberry32(seed * 7 + 3);
+  let c = newCareer();
+  let bad = 0;
+  let guard = 0;
+  while (guard++ < 60) {
+    const t = nextTrip(c);
+    if (!t) break;
+    const season = t.season ?? 'july';
+    const route: RouteId = t.route ?? 'dc';
+    const want = t.id === 'school' ? [] : recommendedFor(season, route).filter((id) => !CONSUMABLES.includes(id));
+    // Buy what's cheap or not rentable, rent the rest; work until the trip is affordable.
+    const rented: string[] = [];
+    for (const id of want) {
+      if (id in c.owned) continue;
+      const p = PRICES[id];
+      const rich = c.money > 2500;
+      if ((p.rent === null || p.buy <= 120 || rich) && c.money >= p.buy + tripCost(t)) c = buy(c, id);
+      else if (p.rent !== null) rented.push(id);
+      else {
+        while (c.money < p.buy + tripCost(t)) c = work(c);
+        c = buy(c, id);
+      }
+    }
+    while (c.money < tripCost(t) + rentalCost(rented)) c = work(c);
+    if (t.id === 'school') {
+      const perf = (policy.skill ?? 0.5) + (rng() - 0.5) * 0.3;
+      const passed = perf >= SCHOOL_PASS;
+      const fake = { ending: 'retreat', summited: passed, packed: [], log: [], usedEvents: [], flags: {} } as unknown as GameState;
+      c = finishTrip(c, t, fake, []).career;
+      if (!passed) c.done = c.done.filter((x) => x !== 'school');
+      continue;
+    }
+    const pack = [...Object.keys(c.owned).filter((id) => want.includes(id)), ...rented, ...CONSUMABLES.filter((id) => want.includes(id) || id === 'food')];
+    const s = play(policy, 50000 + seed * 100 + guard, season, route, { pack, career: effectsFor(c, pack) });
+    if (s.ending && !ENDINGS[s.ending].good) bad++;
+    c = finishTrip(c, t, s, rented).career;
+  }
+  return { c, bad, rainier: c.done.includes('rainier') };
+}
+
+function careerReport(runs: number) {
+  console.log(`\n=== Career: ${runs} careers with the smart player ===`);
+  let done = 0;
+  let weeks = 0;
+  let trips = 0;
+  let bad = 0;
+  let money = 0;
+  for (let i = 0; i < runs; i++) {
+    const r = careerRun(i, POLICIES[0]);
+    if (r.rainier) done++;
+    weeks += r.c.weeks;
+    trips += r.c.trips;
+    bad += r.bad;
+    money += r.c.money;
+  }
+  console.log(`  reached the summit of Rainier: ${((done / runs) * 100).toFixed(1)}%`);
+  console.log(`  average trips ${(trips / runs).toFixed(1)}, weeks of work ${(weeks / runs).toFixed(1)}, bad endings ${(bad / runs).toFixed(2)} per career, money left $${Math.round(money / runs)}`);
+}
+
 function main() {
+  if (process.argv.includes('--career')) {
+    const arg = process.argv.indexOf('--runs');
+    return careerReport(arg > 0 ? Number(process.argv[arg + 1]) : 300);
+  }
   const se = process.argv.indexOf('--season');
   const seasons: Season[] = se > 0 ? [process.argv[se + 1] as Season] : SEASON_IDS;
   if (seasons.some((x) => !SEASONS[x])) throw new Error(`Season must be one of ${SEASON_IDS.join(', ')}`);
