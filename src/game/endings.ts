@@ -12,7 +12,7 @@ export interface EndingInfo {
 export const ENDINGS: Record<EndingId, EndingInfo> = {
   summit: {
     title: 'Summit and home',
-    body: 'You stood on Columbia Crest and walked back into the Paradise parking lot. That’s the whole climb.',
+    body: 'You stood on Columbia Crest and walked back to the trailhead parking lot. That’s the whole climb.',
     lesson: 'About half the people who attempt Rainier reach the summit. Getting down is the part that counts.',
     good: true,
   },
@@ -70,6 +70,12 @@ export const ENDINGS: Record<EndingId, EndingInfo> = {
     lesson: 'In spring, carry a transceiver, probe and shovel, dig a pit before committing to a loaded slope, and cross one at a time. Turning around is often the only safe call.',
     good: false,
   },
+  icefall: {
+    title: 'Caught by icefall',
+    body: 'A serac broke off the ice cliff above and the blocks came down the slope you were on. A helicopter flew you out.',
+    lesson: 'Spend as little time as you can under hanging ice, move through early while it is frozen, and camp out of its path.',
+    good: false,
+  },
   partner: {
     title: 'Partner down',
     body: 'Your partner collapsed with HACE high on the mountain. A rescue team brought them down.',
@@ -81,7 +87,8 @@ export const ENDINGS: Record<EndingId, EndingInfo> = {
 export function computeScore(s: GameState): number {
   if (!s.ending) return 0;
   const info = ENDINGS[s.ending];
-  if (!info.good) return s.summited ? 300 : 100;
+  const modeFactor = s.mode === 'guided' ? 0.6 : s.mode === 'hardcore' ? 1.5 : 1;
+  if (!info.good) return Math.round((s.summited ? 300 : 100) * modeFactor);
   let score = s.ending === 'summit' ? 1000 : 400;
   if (s.flags.goodCall) score += 250;
   score += Math.round(s.stats.stamina + s.stats.warmth + s.stats.morale);
@@ -91,7 +98,8 @@ export function computeScore(s: GameState): number {
   if (s.flags.snowBlind) score -= 100;
   if (s.flags.ankle) score -= 80;
   if (s.flags.pushedPastTurnaround) score -= 150;
-  return Math.max(0, score);
+  if (s.flags.partnerHurt) score -= 100;
+  return Math.max(0, Math.round(score * modeFactor));
 }
 
 /** Gear-specific tips for the debrief. */
@@ -99,21 +107,21 @@ export function gearReview(packed: string[], season: Season = 'july'): string[] 
   const tips: string[] = [];
   const has = (id: string) => packed.includes(id);
   if (!has('helmet')) tips.push('No helmet. Rockfall at Cathedral Gap and on the Cleaver is common.');
-  if (!has('rope') || !has('harness')) tips.push('No rope team. Every glacier above Muir has hidden crevasses.');
+  if (!has('rope') || !has('harness')) tips.push('No rope team. Every glacier on Rainier has hidden crevasses.');
   if (!has('axe')) tips.push('No ice axe. Without one, a slip on steep snow can’t be stopped.');
-  if (!has('crampons_steel') && !has('crampons_alu')) tips.push('No crampons. Hard morning ice above Muir needs them.');
+  if (!has('crampons_steel') && !has('crampons_alu')) tips.push('No crampons. Hard morning ice above high camp needs them.');
   if (has('crampons_alu')) tips.push('Aluminum crampons dull on the Cleaver’s rock. Steel is the Rainier standard.');
   if (has('boots_hiking')) tips.push('Hiking boots flex out of crampons, soak through in snow, and leave your toes cold. Use stiff mountaineering boots.');
   if (!has('mitts')) tips.push('No mittens. In wind above 13,000 ft, gloves alone often aren’t enough for your fingers.');
   if (has('cotton')) tips.push('Cotton soaks up sweat and stays wet. Stick to synthetics and wool.');
   if (season === 'may' && !has('avy')) tips.push('No transceiver, probe or shovel. Spring slopes slide, and without them nobody can find you.');
-  if (season === 'may' && !has('snowshoes')) tips.push('No snowshoes. Spring snow below Muir is deep and soft by late morning.');
+  if (season === 'may' && !has('snowshoes')) tips.push('No snowshoes. Spring snow on the approach is deep and soft by late morning.');
   if (season !== 'may' && has('avy')) tips.push('Avalanche gear is about 4.4 lb of extra weight on a summer Cleaver climb.');
   if (season !== 'may' && has('snowshoes')) tips.push('Snowshoes are dead weight once the trail melts out.');
   if (season === 'september' && !has('screws')) tips.push('No ice screws. Late-season glaciers are hard ice where a picket won’t hold.');
   if (!has('glasses')) tips.push('No glacier glasses. Snow blindness can set in within hours on a sunny snowfield.');
   if (!has('parka')) tips.push('No parka. Breaks and the summit get very cold.');
-  if (!has('gps') && !has('map')) tips.push('No navigation. The Muir Snowfield whiteout is a classic trap.');
+  if (!has('gps') && !has('map')) tips.push('No navigation. Whiteouts on the big snowfields are a classic trap.');
   if (!has('wands')) tips.push('Wands are cheap insurance for coming down the snowfield in a cloud.');
   const heavy = packed.reduce((n, id) => n + (GEAR_BY_ID[id]?.oz ?? 0), 0) / 16;
   if (heavy > 45) tips.push(`Your kit weighed about ${Math.round(heavy)} lb before the pack. Every pound costs energy.`);

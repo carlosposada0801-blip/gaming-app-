@@ -21,6 +21,8 @@ altitude sickness, morale, weather and time.
 npm run sim                                       # 2,000 seeded climbs per style, per season
 npm run sim -- --season may                       # one season: may | july | september
 npm run sim -- --trace smart 1001 --season july   # one climb's field notes
+npm run sim -- --route all --season july          # every route (dc | emmons | kautz | liberty)
+npm run sim -- --partner friend                   # veteran | friend | firstTimer
 ```
 
 ## Put it on the App Store

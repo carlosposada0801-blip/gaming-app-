@@ -18,7 +18,35 @@ export const NODES: RouteNode[] = [
   { name: 'Columbia Crest', ft: 14411, desc: 'The true summit of Mount Rainier.' },
 ];
 
-export type Terrain = 'trail' | 'snowfield' | 'gap' | 'cleaver' | 'glacier' | 'upper' | 'crater';
+export type Terrain = 'trail' | 'snowfield' | 'gap' | 'cleaver' | 'glacier' | 'upper' | 'crater' | 'ridge' | 'ice';
+
+/** What can happen on a leg; the events in events.ts read these instead of leg numbers. */
+export interface Hazards {
+  /** Sunny snow below high camp: glare and sunburn without glasses and sunscreen. */
+  glare?: boolean;
+  /** A wide, featureless snowfield: whiteout navigation, and where wands go. */
+  whiteout?: boolean;
+  /** Glissade chutes on the way down. */
+  glissade?: boolean;
+  /** Chance of a rockfall event going up and coming down. */
+  rockfall?: [number, number];
+  /** A loose rock rib walked in crampons (Disappointment Cleaver). */
+  cleaver?: boolean;
+  crevasse?: boolean;
+  ladder?: boolean;
+  /** Steep, hard snow where a slip turns into a slide. */
+  slip?: boolean;
+  /** Where a lens cloud over the summit is easy to see. */
+  lenticular?: boolean;
+  /** Afternoon slush balling up under crampons on the way down. */
+  balling?: boolean;
+  /** Multiplier on the season's avalanche chance. */
+  avalanche?: number;
+  /** Steep ice: front-pointing with two tools, screws for protection. */
+  ice?: boolean;
+  /** Exposed to ice falling from seracs above. */
+  icefall?: number;
+}
 
 export interface Leg {
   /** Minutes going up at a steady pace. */
@@ -31,17 +59,26 @@ export interface Leg {
   terrain: Terrain;
   name: string;
   roped: boolean;
+  /** How far you can stray from the boot track (m). */
+  corridor: number;
+  hazards: Hazards;
 }
 
 /** LEGS[i] connects NODES[i] and NODES[i + 1]. */
 export const LEGS: Leg[] = [
-  { minutes: 150, slopeDeg: 15, terrain: 'trail', name: 'Skyline Trail to Pebble Creek', roped: false },
-  { minutes: 240, slopeDeg: 20, terrain: 'snowfield', name: 'Muir Snowfield', roped: false },
-  { minutes: 75, slopeDeg: 28, terrain: 'gap', name: 'Cathedral Gap and the Ingraham Glacier', roped: true },
-  { minutes: 120, slopeDeg: 32, terrain: 'cleaver', name: 'Disappointment Cleaver', roped: true },
-  { minutes: 75, slopeDeg: 30, terrain: 'glacier', name: 'Upper Ingraham Glacier', roped: true },
-  { minutes: 120, slopeDeg: 33, terrain: 'upper', name: 'Switchbacks to the crater rim', roped: true },
-  { minutes: 25, slopeDeg: 10, terrain: 'crater', name: 'Across the crater', roped: true },
+  { minutes: 150, slopeDeg: 15, terrain: 'trail', name: 'Skyline Trail to Pebble Creek', roped: false, corridor: 3,
+    hazards: { glare: true } },
+  { minutes: 240, slopeDeg: 20, terrain: 'snowfield', name: 'Muir Snowfield', roped: false, corridor: 30,
+    hazards: { glare: true, whiteout: true, glissade: true, avalanche: 0.5 } },
+  { minutes: 75, slopeDeg: 28, terrain: 'gap', name: 'Cathedral Gap and the Ingraham Glacier', roped: true, corridor: 6,
+    hazards: { rockfall: [0.5, 0.65], crevasse: true, lenticular: true, balling: true, avalanche: 1 } },
+  { minutes: 120, slopeDeg: 32, terrain: 'cleaver', name: 'Disappointment Cleaver', roped: true, corridor: 4,
+    hazards: { cleaver: true, rockfall: [0, 0.6], lenticular: true, balling: true, avalanche: 1 } },
+  { minutes: 75, slopeDeg: 30, terrain: 'glacier', name: 'Upper Ingraham Glacier', roped: true, corridor: 10,
+    hazards: { ladder: true, crevasse: true, slip: true, lenticular: true, balling: true, avalanche: 1 } },
+  { minutes: 120, slopeDeg: 33, terrain: 'upper', name: 'Switchbacks to the crater rim', roped: true, corridor: 10,
+    hazards: { crevasse: true, slip: true, balling: true, avalanche: 1 } },
+  { minutes: 25, slopeDeg: 10, terrain: 'crater', name: 'Across the crater', roped: true, corridor: 15, hazards: {} },
 ];
 
 export const SUMMIT = NODES.length - 1;

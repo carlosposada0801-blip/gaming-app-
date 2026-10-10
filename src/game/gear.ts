@@ -1,5 +1,6 @@
 // Gear catalog. Weights are typical real-world weights in ounces.
 import { SEASONS, type Season } from './season';
+import { ROUTES, type RouteId } from './routes';
 // "layer" decides when a clothing item counts toward warmth:
 //   0 = always worn, 1 = midlayer setting and up, 2 = shell setting and up, 3 = full kit.
 
@@ -11,7 +12,7 @@ export type GearCategory =
   | 'Hands, head & eyes'
   | 'Navigation'
   | 'Essentials'
-  | 'Camp (left at Muir)';
+  | 'Camp (left at high camp)';
 
 export interface Gear {
   id: string;
@@ -41,7 +42,7 @@ export const GEAR: Gear[] = [
   { id: 'boots_double', name: 'Double mountaineering boots', cat: 'Footwear', oz: 92, group: 'boots', warmth: 1.2, layer: 0, feet: 2.6, recommended: false,
     note: 'Removable insulated liner. Warmest and heaviest. Overkill in July, smart in a cold snap or a cold spring.' },
   { id: 'boots_hiking', name: 'Waterproof hiking boots', cat: 'Footwear', oz: 40, group: 'boots', warmth: 0.2, layer: 0, feet: 0.45, recommended: false,
-    note: 'Light and comfy, but the soles flex, strap-on crampons loosen, and they soak through in snow. Toes go numb above Muir.' },
+    note: 'Light and comfy, but the soles flex, strap-on crampons loosen, and they soak through in snow. Toes go numb above high camp.' },
   { id: 'crampons_steel', name: 'Steel 12-point crampons', cat: 'Footwear', oz: 36, group: 'crampons', recommended: true,
     note: 'Front points bite on hard morning ice and survive walking on the Cleaver’s rock.' },
   { id: 'crampons_alu', name: 'Aluminum crampons', cat: 'Footwear', oz: 20, group: 'crampons', recommended: false,
@@ -49,17 +50,19 @@ export const GEAR: Gear[] = [
   { id: 'gaiters', name: 'Gaiters', cat: 'Footwear', oz: 10, feet: 0.25, recommended: true,
     note: 'Keep snow out of your boots and stop crampon points from snagging your pant legs.' },
   { id: 'snowshoes', name: 'Snowshoes', cat: 'Footwear', oz: 66, camp: true, recommended: false,
-    note: 'Float on soft spring snow instead of post-holing to your knees. Left at Camp Muir for summit day.' },
+    note: 'Float on soft spring snow instead of post-holing to your knees. Left at high camp for summit day.' },
 
   // Climbing
   { id: 'axe', name: 'Mountaineering ice axe, 65 cm', cat: 'Climbing', oz: 17, recommended: true,
     note: 'Your self-arrest tool. Carried in your uphill hand on every glacier.' },
+  { id: 'tool', name: 'Technical ice tool', cat: 'Climbing', oz: 21, recommended: false,
+    note: 'A second, steeper axe for front-pointing up steep ice: the Kautz Ice Chute and Liberty Ridge.' },
   { id: 'helmet', name: 'Climbing helmet', cat: 'Climbing', oz: 12, recommended: true,
     note: 'Rockfall at Cathedral Gap and on Disappointment Cleaver is a leading cause of injury.' },
   { id: 'harness', name: 'Alpine harness', cat: 'Climbing', oz: 10, recommended: true,
     note: 'Light, packable, and easy to put on over boots and crampons.' },
   { id: 'poles', name: 'Trekking poles', cat: 'Climbing', oz: 18, recommended: true,
-    note: 'Save your legs and knees on the 4,800 ft from Paradise to Muir.' },
+    note: 'Save your legs and knees on the long approach to high camp.' },
 
   // Glacier travel
   { id: 'rope', name: 'Rope share (30 m, 8.9 mm dry)', cat: 'Glacier travel', oz: 44, recommended: true,
@@ -89,9 +92,9 @@ export const GEAR: Gear[] = [
 
   // Hands, head & eyes
   { id: 'liners', name: 'Liner gloves', cat: 'Hands, head & eyes', oz: 2, warmth: 0.3, hand: 0, recommended: true,
-    note: 'Thin gloves for the warm hike to Muir and fiddly rope work.' },
+    note: 'Thin gloves for the warm approach and fiddly rope work.' },
   { id: 'gloves', name: 'Insulated gloves', cat: 'Hands, head & eyes', oz: 7, warmth: 0.6, hand: 1, recommended: true,
-    note: 'Your main glove above Camp Muir. Warm enough for most nights, nimble enough for rope work.' },
+    note: 'Your main glove above high camp. Warm enough for most nights, nimble enough for rope work.' },
   { id: 'mitts', name: 'Expedition mittens', cat: 'Hands, head & eyes', oz: 10, warmth: 1.1, hand: 2, recommended: true,
     note: 'Fingers together stay warm. For wind on the upper mountain. Clumsy for knots and prusiks.' },
   { id: 'balaclava', name: 'Balaclava & warm hat', cat: 'Hands, head & eyes', oz: 4, warmth: 0.5, layer: 3, recommended: true,
@@ -130,26 +133,26 @@ export const GEAR: Gear[] = [
     note: 'Human waste bags. The park requires you to pack waste out above the toilets.' },
 
   // Camp
-  { id: 'bag', name: 'Sleeping bag (0°F)', cat: 'Camp (left at Muir)', oz: 40, camp: true, recommended: true,
-    note: 'For a few hours of sleep in the public shelter at Camp Muir.' },
-  { id: 'pad', name: 'Sleeping pad', cat: 'Camp (left at Muir)', oz: 16, camp: true, recommended: true,
+  { id: 'bag', name: 'Sleeping bag (0°F)', cat: 'Camp (left at high camp)', oz: 40, camp: true, recommended: true,
+    note: 'For a few hours of sleep at high camp: the shelter at Camp Muir, or a tent.' },
+  { id: 'pad', name: 'Sleeping pad', cat: 'Camp (left at high camp)', oz: 16, camp: true, recommended: true,
     note: 'The shelter floor is cold stone.' },
-  { id: 'stove', name: 'Stove, fuel & pot', cat: 'Camp (left at Muir)', oz: 18, camp: true, recommended: true,
-    note: 'Melt snow to refill your water at Muir.' },
+  { id: 'stove', name: 'Stove, fuel & pot', cat: 'Camp (left at high camp)', oz: 18, camp: true, recommended: true,
+    note: 'Melt snow to refill your water at high camp.' },
 ];
 
 export const GEAR_BY_ID: Record<string, Gear> = Object.fromEntries(GEAR.map((g) => [g.id, g]));
 
 export const CATEGORIES: GearCategory[] = [
-  'Footwear', 'Climbing', 'Glacier travel', 'Clothing', 'Hands, head & eyes', 'Navigation', 'Essentials', 'Camp (left at Muir)',
+  'Footwear', 'Climbing', 'Glacier travel', 'Clothing', 'Hands, head & eyes', 'Navigation', 'Essentials', 'Camp (left at high camp)',
 ];
 
 /** The summer (July) guide's list. */
 export const RECOMMENDED = GEAR.filter((g) => g.recommended).map((g) => g.id);
 
-/** A guide's list for the season: the summer list plus seasonal extras. */
-export function recommendedFor(season: Season): string[] {
-  return [...RECOMMENDED, ...SEASONS[season].extraGear];
+/** A guide's list for the season and route: the summer list plus seasonal and route extras. */
+export function recommendedFor(season: Season, route: RouteId = 'dc'): string[] {
+  return [...new Set([...RECOMMENDED, ...SEASONS[season].extraGear, ...ROUTES[route].extraGear])];
 }
 
 export function packWeightLb(ids: string[], leftCampGear = false): number {

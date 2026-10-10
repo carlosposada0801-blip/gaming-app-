@@ -6,7 +6,8 @@
 //   CORE  22 km square, 28.6 m data rendered as a 57 m mesh (the mountain).
 //   PATCH a 1.6 km square around the climber at 6.5 m with added relief (rocks, rolls in the
 //         snow), rebuilt as the climber moves. It sits on the core mesh exactly at its edges.
-import { NODES } from '../game/route';
+import { ROUTES, type RouteId } from '../game/routes';
+import { ROUTE_WAYPOINTS } from './data/routeWaypoints';
 import {
   CORE_B64, CORE_HALF, CORE_N, FAR_B64, FAR_HALF, FAR_N, HORIZON_B64, HORIZON_HALF, HORIZON_N, WAYPOINTS,
 } from './data/rainierDem';
@@ -157,22 +158,41 @@ export function slopeAt(x: number, z: number) {
 
 // ---------- the route ----------
 
-const NODE_WAYPOINT = ['Paradise', 'Pebble Creek', 'Camp Muir', 'Ingraham Flats', 'Top of the Cleaver', 'High Break', 'Crater Rim', 'Columbia Crest'];
 export const ROUTE_SPACING = 6;
 /** Sideways switchback amplitude (m) for the stretch starting at each waypoint. */
 const SWITCHBACK: Record<string, number> = {
   'Top of the Cleaver': 18,
   'High Break': 28,
   'Disappointment Cleaver base': 8,
+  'Inter Glacier': 12,
+  'Top of the Corridor': 14,
+  'Upper Emmons': 24,
+  'Wapowety Cleaver': 10,
+  'Top of the Ice Chute': 12,
+  'Black Pyramid': 8,
 };
 
-function buildRoute() {
+const WAYPOINTS_BY_ROUTE: Record<RouteId, { name: string; x: number; z: number }[]> = { dc: WAYPOINTS, ...ROUTE_WAYPOINTS };
+
+export interface RoutePath {
+  id: RouteId;
+  pts: Vec3[];
+  /** Route-point index of each stop in the route's `nodes`. */
+  nodeIndex: number[];
+  /** Meters along the route at each route point (matches src/game/data/routeProfile.ts). */
+  cum: number[];
+}
+
+/** Builds the walked line for a route: waypoints joined every ~6 m, with switchbacks on the steeps. */
+export function buildRoute(id: RouteId): RoutePath {
   const pts: Vec3[] = [];
-  const nodeIndex: number[] = new Array(NODES.length).fill(0);
-  WAYPOINTS.forEach((w, wi) => {
-    const ni = NODE_WAYPOINT.indexOf(w.name);
+  const names = ROUTES[id].nodes.map((n) => n.name);
+  const nodeIndex: number[] = new Array(names.length).fill(0);
+  const way = WAYPOINTS_BY_ROUTE[id];
+  way.forEach((w, wi) => {
+    const ni = names.indexOf(w.name);
     if (ni >= 0) nodeIndex[ni] = pts.length;
-    const next = WAYPOINTS[wi + 1];
+    const next = way[wi + 1];
     if (!next) {
       pts.push([w.x, meshHeight(CORE_MESH, w.x, w.z), w.z]);
       return;
@@ -190,52 +210,65 @@ function buildRoute() {
       pts.push([x, meshHeight(CORE_MESH, x, z), z]);
     }
   });
-  return { pts, nodeIndex };
+  const cum = [0];
+  for (let i = 1; i < pts.length; i++) cum.push(cum[i - 1] + Math.hypot(pts[i][0] - pts[i - 1][0], pts[i][2] - pts[i - 1][2]));
+  return { id, pts, nodeIndex, cum };
 }
 
-export const ROUTE = buildRoute();
+const built = new Map<RouteId, RoutePath>();
 
-/** Meters along the route at each route point (matches src/game/data/routeProfile.ts). */
-export const ROUTE_CUM: number[] = (() => {
-  const out = [0];
-  for (let i = 1; i < ROUTE.pts.length; i++) {
-    const [ax, , az] = ROUTE.pts[i - 1];
-    const [bx, , bz] = ROUTE.pts[i];
-    out.push(out[i - 1] + Math.hypot(bx - ax, bz - az));
+/** The route the scene shows. Its fields are swapped by `setSceneRoute`. */
+export const ROUTE: RoutePath = buildRoute('dc');
+built.set('dc', { ...ROUTE });
+
+// Spatial hash of route points for "how far from the track" queries.
+const CELL = 24;
+let routeCells = new Map<number, number[]>();
+const cellKey = (cx: number, cz: number) => cx * 100003 + cz;
+function hashRoute() {
+  routeCells = new Map();
+  ROUTE.pts.forEach(([x, , z], i) => {
+    const k = cellKey(Math.floor(x / CELL), Math.floor(z / CELL));
+    const list = routeCells.get(k);
+    if (list) list.push(i);
+    else routeCells.set(k, [i]);
+  });
+}
+hashRoute();
+
+export function setSceneRoute(id: RouteId) {
+  if (ROUTE.id === id) return;
+  let r = built.get(id);
+  if (!r) {
+    r = buildRoute(id);
+    built.set(id, r);
   }
-  return out;
-})();
+  Object.assign(ROUTE, r);
+  hashRoute();
+}
 
 /** Fractional route-point index at a distance along the route. */
 export function routeIndexAt(d: number) {
+  const cum = ROUTE.cum;
   if (d <= 0) return 0;
-  const last = ROUTE_CUM.length - 1;
-  if (d >= ROUTE_CUM[last]) return last;
+  const last = cum.length - 1;
+  if (d >= cum[last]) return last;
   let lo = 0;
   let hi = last;
   while (hi - lo > 1) {
     const mid = (lo + hi) >> 1;
-    if (ROUTE_CUM[mid] <= d) lo = mid;
+    if (cum[mid] <= d) lo = mid;
     else hi = mid;
   }
-  return lo + (d - ROUTE_CUM[lo]) / (ROUTE_CUM[hi] - ROUTE_CUM[lo] || 1);
+  return lo + (d - cum[lo]) / (cum[hi] - cum[lo] || 1);
 }
+
+/** Columbia Crest: every route ends there. */
 export const SUMMIT_POS: Vec3 = ROUTE.pts[ROUTE.pts.length - 1];
 
 export function nodePosition(i: number): Vec3 {
   return ROUTE.pts[ROUTE.nodeIndex[i]];
 }
-
-// Spatial hash of route points for "how far from the track" queries.
-const CELL = 24;
-const routeCells = new Map<number, number[]>();
-const cellKey = (cx: number, cz: number) => cx * 100003 + cz;
-ROUTE.pts.forEach(([x, , z], i) => {
-  const k = cellKey(Math.floor(x / CELL), Math.floor(z / CELL));
-  const list = routeCells.get(k);
-  if (list) list.push(i);
-  else routeCells.set(k, [i]);
-});
 
 /** Distance (m) to the nearest route point, capped at 2 * CELL. */
 export function distToRoute(x: number, z: number) {

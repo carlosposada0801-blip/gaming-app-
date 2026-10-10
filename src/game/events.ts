@@ -1,10 +1,16 @@
-import { FORECAST_TEXT, crampons, has, roped } from './helpers';
-import { DAY, MUIR, NODES, SUMMIT, isNight, minuteOfDay } from './route';
+import { FORECAST_TEXT, crampons, has, roped, routeOf, summitOf } from './helpers';
+import { DAY, formatClock as formatClockShort, isNight, minuteOfDay } from './route';
 import { anchorMinutes, arrestOdds, ladderOutcome, prusikOutcome, zpulleyOutcome } from './skills';
 import { SEASONS } from './season';
-import type { Choice, EventDef, GameState, Outcome, Rng, SkillId } from './types';
+import { PARTNERS, partnerHas, partnerOf } from './partners';
+import type { ArrivalContext, Choice, EventDef, GameState, Outcome, Rng, SkillId } from './types';
 
-const ft = (s: GameState) => NODES[s.node].ft;
+const ft = (s: GameState) => routeOf(s).nodes[s.node].ft;
+/** The leg just walked, and what can happen on it. */
+const legOf = (s: GameState, c: ArrivalContext) => routeOf(s).legs[c.leg];
+const hz = (s: GameState, c: ArrivalContext) => legOf(s, c)?.hazards ?? {};
+const isDC = (s: GameState) => s.route === 'dc';
+const here = (s: GameState) => routeOf(s).nodes[s.node].name;
 
 /** Rockfall roll shared by Cathedral Gap and the Cleaver. */
 function rockfall(s: GameState, p: number, rng: Rng, base: Outcome): Outcome {
@@ -13,6 +19,20 @@ function rockfall(s: GameState, p: number, rng: Rng, base: Outcome): Outcome {
   // Late in the day the sun loosens rock frozen in place overnight.
   if (s.flags.pushedPastTurnaround) p += 0.2;
   if (rng() >= p) return base;
+  // Sometimes it's your partner the rock finds.
+  if (rng() < 0.3) {
+    const name = partnerOf(s).name;
+    if (partnerHas(s, 'helmet')) {
+      return { ...base, text: `${base.text} A rock cracks off ${name}’s helmet. Shaken, but okay.`, delta: { ...base.delta, morale: (base.delta?.morale ?? 0) - 6 }, tone: 'bad' };
+    }
+    return {
+      text: `A rock hits ${name} in the head. No helmet. They’re conscious but bleeding, and you start down at once.`,
+      delta: { morale: -20, stamina: -8 },
+      turnBack: true,
+      mutate: (x) => { x.flags.partnerHurt = true; },
+      tone: 'bad',
+    };
+  }
   if (has(s, 'helmet')) {
     return {
       ...base,
@@ -33,9 +53,9 @@ function slide(s: GameState, rng: Rng, arrestOdds: number, soft = false): Outcom
       tone: 'good',
     };
   }
-  if (roped(s) && rng() < 0.8) {
+  if (roped(s) && rng() < partnerOf(s).catch) {
     return {
-      text: 'You can’t stop yourself, but your partner hears the shout and drops into self-arrest. The rope comes tight.',
+      text: `You can’t stop yourself, but ${partnerOf(s).name} hears the shout and drops into self-arrest. The rope comes tight.`,
       delta: { stamina: -12, morale: -12, warmth: -5 },
       tone: 'bad',
     };
@@ -83,10 +103,10 @@ export const EVENTS: EventDef[] = [
     title: 'Ranger check',
     chance: () => 0, // set as the opening event
     text: (s) =>
-      `A climbing ranger at the Paradise Climbing Information Center checks your permit and reads the forecast: “${FORECAST_TEXT[s.forecast]}” Then: “Got blue bags?”`,
+      `A climbing ranger at ${routeOf(s).ranger} checks your permit and reads the forecast: “${FORECAST_TEXT[s.forecast]}” Then: “Got blue bags?”`,
     choices: (s) =>
       has(s, 'bluebags')
-        ? [{ label: 'Show your blue bags and hit the trail', resolve: () => ({ text: 'The ranger nods. You start up the Skyline Trail.', delta: { morale: 3 }, tone: 'good' }) }]
+        ? [{ label: 'Show your blue bags and hit the trail', resolve: () => ({ text: `The ranger nods. You start up the ${routeOf(s).legs[0].name}.`, delta: { morale: 3 }, tone: 'good' }) }]
         : [
             {
               label: 'Grab some at the ranger station',
@@ -107,7 +127,7 @@ export const EVENTS: EventDef[] = [
   {
     id: 'summit',
     title: 'Columbia Crest',
-    chance: (s) => (s.dir === 'up' && s.node === SUMMIT ? 1 : 0),
+    chance: (s) => (s.dir === 'up' && s.node === summitOf(s) ? 1 : 0),
     text: () =>
       'Columbia Crest, 14,411 feet. The highest point in Washington. Mount Adams, Mount Hood, and Mount St. Helens line up to the south. You’re only halfway: most accidents happen on the way down.',
     choices: () => [
@@ -121,7 +141,7 @@ export const EVENTS: EventDef[] = [
   {
     id: 'crater',
     title: 'The crater',
-    chance: (s) => (s.dir === 'up' && s.node === 6 ? 1 : 0),
+    chance: (s) => (s.dir === 'up' && s.node === routeOf(s).crater ? 1 : 0),
     text: () =>
       'You crest the crater rim. Steam vents have melted caves into the ice of the crater floor, and the summit register sits in a metal box among the rocks.',
     choices: () => [
@@ -133,7 +153,7 @@ export const EVENTS: EventDef[] = [
     id: 'partner',
     title: 'Your partner is struggling',
     repeatable: true,
-    chance: (s) => (s.dir === 'up' && s.node >= 3 && s.partnerAms > 55 && !s.flags.partnerDown ? 1 : 0),
+    chance: (s) => (s.dir === 'up' && s.node > routeOf(s).camp && s.partnerAms > 55 && !s.flags.partnerDown ? 1 : 0),
     text: () =>
       'Your rope partner is slurring words and can’t walk heel-to-toe in a straight line. Losing coordination (ataxia) is a warning sign of HACE, swelling of the brain at altitude. The treatment is going down.',
     choices: () => [
@@ -171,9 +191,9 @@ export const EVENTS: EventDef[] = [
   {
     id: 'nature_calls',
     title: 'Nature calls',
-    chance: (s) => (s.flags.skippedBlueBags && s.node === MUIR && s.dir === 'up' ? 1 : 0),
-    text: () =>
-      'Nature calls at Camp Muir, and the snow around camp is everyone’s drinking water. Above the toilets, the park requires you to pack out human waste in a blue bag.',
+    chance: (s) => (s.flags.skippedBlueBags && s.node === routeOf(s).camp && s.dir === 'up' ? 1 : 0),
+    text: (s) =>
+      `Nature calls at ${here(s)}, and the snow around camp is everyone’s drinking water. Away from the few toilets, the park requires you to pack out human waste in a blue bag.`,
     choices: () => [
       { label: 'Ask another party for a spare', resolve: () => ({ text: 'Awkward, but they hand you two. Lesson learned.', minutes: 10, delta: { morale: -6 }, tone: 'info' }) },
     ],
@@ -181,9 +201,9 @@ export const EVENTS: EventDef[] = [
   {
     id: 'glare',
     title: 'Glare on the snowfield',
-    chance: (s, c) => (c.dir === 'up' && c.leg <= 1 && !isNight(c.start, s.season) && s.weather === 'clear' && !has(s, 'glasses') ? 0.85 : 0),
+    chance: (s, c) => (c.dir === 'up' && hz(s, c).glare && !isNight(c.start, s.season) && s.weather === 'clear' && !has(s, 'glasses') ? 0.85 : 0),
     text: () =>
-      'The sun is blazing off the Muir Snowfield. Snow reflects most of the UV that hits it, and you have no glacier glasses on.',
+      'The sun is blazing off the snow. Snow reflects most of the UV that hits it, and you have no glacier glasses on.',
     choices: (s) => [
       req(has(s, 'goggles'), 'Wear your ski goggles', 'ski goggles', () => ({ text: 'Hot and foggy, but your eyes are covered.', delta: { hydration: -3 }, tone: 'info' })),
       req(has(s, 'firstaid'), 'Make slit glasses from tape and cardboard', 'a first aid & repair kit', () => ({
@@ -203,7 +223,7 @@ export const EVENTS: EventDef[] = [
   {
     id: 'sunburn',
     title: 'Sunburn',
-    chance: (s, c) => (c.dir === 'up' && c.leg <= 1 && !isNight(c.start, s.season) && s.weather === 'clear' && !has(s, 'sun') ? 0.7 : 0),
+    chance: (s, c) => (c.dir === 'up' && hz(s, c).glare && !isNight(c.start, s.season) && s.weather === 'clear' && !has(s, 'sun') ? 0.7 : 0),
     text: () => 'No sunscreen. The light bouncing off the snow burns under your chin, inside your nostrils, and on your lips.',
     choices: () => [
       { label: 'Pull up your hood and keep going', resolve: () => ({ text: 'Your face is raw and blistering by Camp Muir.', delta: { morale: -8, hydration: -5 }, mutate: (st) => { st.flags.sunburn = true; }, tone: 'bad' }) },
@@ -212,43 +232,47 @@ export const EVENTS: EventDef[] = [
   {
     id: 'whiteout_up',
     title: 'Whiteout on the snowfield',
-    chance: (s, c) => (c.dir === 'up' && c.leg === 1 ? (s.weather === 'whiteout' ? 1 : s.forecast === 'stable' ? 0.1 : 0.25) : 0),
-    text: () =>
-      'Halfway up the Muir Snowfield a cloud swallows you. Visibility drops to thirty feet and every direction is white. Climbers have wandered off this snowfield onto the Nisqually and Cowlitz glaciers.',
+    chance: (s, c) => (c.dir === 'up' && hz(s, c).whiteout ? (s.weather === 'whiteout' ? 1 : s.forecast === 'stable' ? 0.1 : 0.25) : 0),
+    text: (s) =>
+      isDC(s)
+        ? 'Halfway up the Muir Snowfield a cloud swallows you. Visibility drops to thirty feet and every direction is white. Climbers have wandered off this snowfield onto the Nisqually and Cowlitz glaciers.'
+        : 'Partway up, a cloud swallows you. Visibility drops to thirty feet and every direction is white. A few degrees off course leads onto crevasses or over cliffs.',
     choices: (s) => [
-      req(has(s, 'gps'), 'Follow the preloaded GPS track', 'a GPS', () => ({ text: 'You follow the line on the screen straight to Camp Muir.', minutes: 15, tone: 'good' })),
-      req(has(s, 'map'), 'Navigate by map and compass', 'a map & compass', () => ({ text: 'Slow, careful bearings, checked against your altimeter. You hit Muir.', minutes: 40, delta: { stamina: -4 }, tone: 'good' })),
+      req(has(s, 'gps'), 'Follow the preloaded GPS track', 'a GPS', (st) => ({ text: `You follow the line on the screen straight to ${here(st)}.`, minutes: 15, tone: 'good' })),
+      req(has(s, 'map'), 'Navigate by map and compass', 'a map & compass', (st) => ({ text: `Slow, careful bearings, checked against your altimeter. You hit ${here(st)}.`, minutes: 40 - 5 * st.skills.nav, delta: { stamina: -4 }, tone: 'good' })),
       {
         label: 'Follow old boot tracks',
         resolve: (_s, rng) =>
-          rng() < 0.5
-            ? { text: 'The tracks fade out. You’d drifted east toward the Cowlitz Glacier cliffs and had to backtrack for two hours.', minutes: 120, delta: { warmth: -15, stamina: -15, morale: -15 }, tone: 'bad' }
-            : { text: 'The tracks hold, and you reach Muir.', minutes: 20, tone: 'info' },
+          rng() < 0.5 - 0.06 * _s.skills.nav
+            ? { text: 'The tracks fade out. You’d drifted toward the cliffs at the edge of the snow and had to backtrack for two hours.', minutes: 120, delta: { warmth: -15, stamina: -15, morale: -15 }, tone: 'bad' }
+            : { text: `The tracks hold, and you reach ${here(_s)}.`, minutes: 20, tone: 'info' },
       },
-      { label: 'Wait for it to lift', hint: '1 h', resolve: () => ({ text: 'An hour later the cloud thins and you can see the huts.', minutes: 60, delta: { morale: -5 }, tone: 'info' }) },
+      { label: 'Wait for it to lift', hint: '1 h', resolve: () => ({ text: 'An hour later the cloud thins and you can see where you are.', minutes: 60, delta: { morale: -5 }, tone: 'info' }) },
     ],
   },
   {
     id: 'whiteout_down',
     title: 'Whiteout on the way down',
-    chance: (s, c) => (c.dir === 'down' && c.leg === 1 ? (s.weather === 'whiteout' || s.weather === 'storm' ? 1 : s.forecast === 'stable' ? 0.12 : 0.3) : 0),
-    text: () =>
-      'Leaving Camp Muir, the cloud comes down on the snowfield. Descending parties drift right onto the Nisqually Glacier or left toward the Cowlitz cliffs. This is where most Rainier navigation accidents happen.',
+    chance: (s, c) => (c.dir === 'down' && hz(s, c).whiteout ? (s.weather === 'whiteout' || s.weather === 'storm' ? 1 : s.forecast === 'stable' ? 0.12 : 0.3) : 0),
+    text: (s) =>
+      isDC(s)
+        ? 'Leaving Camp Muir, the cloud comes down on the snowfield. Descending parties drift right onto the Nisqually Glacier or left toward the Cowlitz cliffs. This is where most Rainier navigation accidents happen.'
+        : 'On the way down, the cloud comes down on you. Every direction looks the same, and the fall line pulls you off route. Descents in whiteouts are where most Rainier navigation accidents happen.',
     choices: (s) => [
       req(!!s.flags.wandsPlaced, 'Follow your wands', 'wands placed on the way up', () => ({ text: 'Wand to wand, a rope length at a time, all the way down.', minutes: 10, tone: 'good' })),
       req(has(s, 'gps'), 'Follow the GPS track', 'a GPS', () => ({ text: 'You stay right on the track.', minutes: 15, tone: 'good' })),
-      req(has(s, 'map'), 'Hold a compass bearing', 'a map & compass', () => ({ text: 'A careful bearing toward Pebble Creek brings you out of the cloud on route.', minutes: 30, delta: { stamina: -3 }, tone: 'good' })),
+      req(has(s, 'map'), 'Hold a compass bearing', 'a map & compass', (st) => ({ text: `A careful bearing toward ${here(st)} brings you out of the cloud on route.`, minutes: 30, delta: { stamina: -3 }, tone: 'good' })),
       {
         label: 'Head downhill and hope',
         resolve: (st, rng) => {
           const r = rng();
-          if (r < 0.35) {
+          if (r < 0.35 - 0.04 * st.skills.nav) {
             return has(st, 'bivy')
-              ? { text: 'You end up on the Nisqually Glacier as night falls. You crawl into your emergency bivy and walk out at dawn.', minutes: 600, delta: { warmth: -30, morale: -25, stamina: -10 }, tone: 'bad' }
+              ? { text: 'You end up lost on a glacier as night falls. You crawl into your emergency bivy and walk out at dawn.', minutes: 600, delta: { warmth: -30, morale: -25, stamina: -10 }, tone: 'bad' }
               : { text: 'You’re lost on the glacier as night falls, with no shelter.', ending: 'lost', tone: 'bad' };
           }
           if (r < 0.65) return { text: 'You drift off route and lose an hour finding the trail.', minutes: 90, delta: { warmth: -10, morale: -10 }, tone: 'bad' };
-          return { text: 'Lucky. You stumble out of the cloud near Pebble Creek.', minutes: 10, tone: 'info' };
+          return { text: `Lucky. You stumble out of the cloud near ${here(st)}.`, minutes: 10, tone: 'info' };
         },
       },
     ],
@@ -256,8 +280,8 @@ export const EVENTS: EventDef[] = [
   {
     id: 'glissade',
     title: 'Glissade chutes',
-    chance: (s, c) => (c.dir === 'down' && c.leg === 1 && s.weather !== 'whiteout' ? SEASONS[s.season].glissade : 0),
-    text: () => 'Glissade chutes run down the Muir Snowfield. Sliding on your butt is fast and fun, and it saves your knees.',
+    chance: (s, c) => (c.dir === 'down' && hz(s, c).glissade && s.weather !== 'whiteout' ? SEASONS[s.season].glissade : 0),
+    text: (s) => `Glissade chutes run down the ${isDC(s) ? 'Muir Snowfield' : 'snow below camp'}. Sliding on your butt is fast and fun, and it saves your knees.`,
     choices: (s) => [
       req(has(s, 'axe'), 'Crampons off, glissade with your axe ready', 'an ice axe', () => ({ text: 'Whoosh. You drop a thousand feet in minutes.', minutes: -40, delta: { morale: 10 }, tone: 'good' })),
       {
@@ -275,7 +299,7 @@ export const EVENTS: EventDef[] = [
   {
     id: 'cleaver',
     title: 'Disappointment Cleaver',
-    chance: (_s, c) => (c.dir === 'up' && c.leg === 3 ? 1 : 0),
+    chance: (s, c) => (c.dir === 'up' && hz(s, c).cleaver ? 1 : 0),
     text: () =>
       'The Cleaver is a rib of loose volcanic rock. The route switchbacks up gravel over rock, "kitty litter" climbers call it, with crampons screeching on stone.',
     choices: (s) => [
@@ -300,10 +324,12 @@ export const EVENTS: EventDef[] = [
   {
     id: 'rockfall_gap',
     title: 'Rockfall',
-    chance: (s, c) => Math.min(0.95, SEASONS[s.season].rockfall
-      * (c.leg === 2 ? (c.dir === 'up' ? 0.5 : 0.65) : c.leg === 3 && c.dir === 'down' ? 0.6 : 0)),
+    chance: (s, c) => {
+      const rf = hz(s, c).rockfall;
+      return rf ? Math.min(0.95, SEASONS[s.season].rockfall * rf[c.dir === 'up' ? 0 : 1]) : 0;
+    },
     text: (s) =>
-      `“ROCK!” A rock the size of a microwave comes bouncing down ${s.node <= 3 && s.dir === 'up' ? 'Cathedral Gap' : 'the gully'} toward your rope team.`,
+      `“ROCK!” A rock the size of a microwave comes bouncing down ${isDC(s) ? (s.node <= 3 && s.dir === 'up' ? 'Cathedral Gap' : 'the gully') : 'the slope above'} toward your rope team.`,
     choices: () => [
       { label: 'Keep moving fast through the gully', resolve: (s, rng) => rockfall(s, 0.3, rng, { text: 'You hustle through. It misses.', delta: { stamina: -6, morale: -4 }, tone: 'info' }) },
       { label: 'Wait for a gap, then cross one at a time', hint: '15 min', resolve: (s, rng) => rockfall(s, 0.12, rng, { text: 'You wait it out and cross when it’s quiet.', minutes: 15, tone: 'good' }) },
@@ -313,7 +339,7 @@ export const EVENTS: EventDef[] = [
     id: 'crevasse',
     title: 'Crevasse fall',
     chance: (s, c) =>
-      [2, 4, 5].includes(c.leg)
+      hz(s, c).crevasse
         ? (0.12 + (c.dir === 'down' && minuteOfDay(s.clock) > 660 ? 0.15 : 0) + (s.flags.pushedPastTurnaround ? 0.2 : 0))
           * SEASONS[s.season].crevasse
           // Leaving the boot track means stepping on untested snow bridges.
@@ -329,7 +355,7 @@ export const EVENTS: EventDef[] = [
             req(has(s, 'rescue_kit'), 'Climb out on your prusiks', 'a crevasse rescue kit', (_st, _rng, perf) => (perf === undefined ? {
               text: 'Foot loop, waist loop, slide, stand. Twenty minutes of work and you flop over the lip.', minutes: 40, delta: { stamina: -15, warmth: -8 }, tone: 'good',
             } : prusikOutcome(perf)), 'prusik'),
-            req(has(s, 'rescue_kit'), 'Your partner builds a Z-pulley and hauls', 'a crevasse rescue kit', (st, _rng, perf) => (perf === undefined ? {
+            req(partnerHas(s, 'rescue_kit'), `${partnerOf(s).name} builds a Z-pulley and hauls`, 'a rescue kit on your partner', (st, _rng, perf) => (perf === undefined ? {
               text: anchorMinutes(st) <= 50
                 ? `${st.season === 'september' ? 'Two ice screws in the hard ice' : 'A buried picket'} for the anchor, a 3:1 haul, and you’re out.`
                 : st.season === 'september' && has(st, 'picket')
@@ -357,7 +383,7 @@ export const EVENTS: EventDef[] = [
   {
     id: 'ladder',
     title: 'Ladder crossing',
-    chance: (s, c) => (c.dir === 'up' && c.leg === 4 ? SEASONS[s.season].ladder : 0),
+    chance: (s, c) => (c.dir === 'up' && hz(s, c).ladder ? SEASONS[s.season].ladder : 0),
     text: () => 'Late-season crevasses force the route across aluminum ladders lashed together over a gap, with hand lines fixed on both sides.',
     choices: (s) => [
       req(has(s, 'harness'), 'Clip into the hand line and walk the rungs', 'a harness', (_st, _rng, perf) => (perf === undefined
@@ -371,7 +397,7 @@ export const EVENTS: EventDef[] = [
     title: 'Slip',
     repeatable: true,
     chance: (s, c) => {
-      if (![4, 5].includes(c.leg) || s.usedEvents.filter((e) => e === 'slip').length >= 2) return 0;
+      if (!hz(s, c).slip || s.usedEvents.filter((e) => e === 'slip').length >= 2) return 0;
       let p = 0.15 + (c.dir === 'down' ? 0.1 : 0);
       // Afternoon slush balls up under crampons on the way down after a late summit.
       if (s.flags.pushedPastTurnaround && c.dir === 'down') p += 0.15;
@@ -382,13 +408,16 @@ export const EVENTS: EventDef[] = [
       return p;
     },
     text: (s) =>
-      has(s, 'gaiters')
-        ? 'Your boot skids on hard, wind-polished snow and you go down, sliding feet-first down the slope.'
-        : 'A crampon point snags your loose pant leg and you pitch forward, sliding headfirst.',
+      routeOf(s).legs[Math.max(0, s.dir === 'up' ? s.node - 1 : s.node)]?.terrain === 'ice'
+        ? 'Your front points shear out of the brittle ice and you’re off, sliding down the chute.'
+        : has(s, 'gaiters')
+          ? 'Your boot skids on hard, wind-polished snow and you go down, sliding feet-first down the slope.'
+          : 'A crampon point snags your loose pant leg and you pitch forward, sliding headfirst.',
     choices: (s) => [
       req(has(s, 'axe'), 'Self-arrest with your ice axe', 'an ice axe',
         (st, rng, perf) => slide(st, rng, perf === undefined
-          ? (st.flags.cramponsDull ? 0.75 : 0.88) - (SEASONS[st.season].hardIce ? 0.1 : 0)
+          ? (st.flags.cramponsDull ? 0.75 : 0.88) - (SEASONS[st.season].hardIce ? 0.1 : 0) + 0.02 * st.skills.arrest
+            - (routeOf(st).legs[Math.max(0, st.dir === 'up' ? st.node - 1 : st.node)]?.terrain === 'ice' ? 0.2 : 0)
           : arrestOdds(st, perf)), 'arrest'),
       { label: 'Dig in your hands and heels', resolve: (st, rng) => slide({ ...st, packed: st.packed.filter((g) => g !== 'axe') }, rng, 0) },
     ],
@@ -398,8 +427,9 @@ export const EVENTS: EventDef[] = [
     title: 'Whumpf',
     chance: (s, c) => {
       const base = SEASONS[s.season].avalanche;
-      if (!base || c.dir !== 'up' || c.leg < 1 || c.leg > 5) return 0;
-      let p = base * (c.leg === 1 ? 0.5 : 1);
+      const mult = hz(s, c).avalanche;
+      if (!base || !mult || c.dir !== 'up') return 0;
+      let p = base * mult;
       // New snow and wind load slopes; spring sun weakens them by late morning.
       if (s.weather === 'storm' || s.weather === 'coldsnap' || s.forecast === 'incoming') p *= 1.6;
       if (minuteOfDay(s.clock) > 660 && !isNight(s.clock, s.season)) p *= 1.5;
@@ -431,9 +461,77 @@ export const EVENTS: EventDef[] = [
     ],
   },
   {
+    id: 'ice_up',
+    title: 'Steep ice',
+    chance: (s, c) => (c.dir === 'up' && hz(s, c).ice ? 1 : 0),
+    text: (s) =>
+      `The ${routeOf(s).legs[s.node - 1]?.name ?? 'ice'} rears up: hard, grey-blue ice at forty-some degrees. Kicking steps won’t work here. It takes front points and picks, and a fall won’t stop on its own.`,
+    choices: (s) => [
+      req(has(s, 'tool') && (has(s, 'screws') || partnerHas(s, 'screws')), 'Two tools, front points, and screws for protection', 'a second ice tool and ice screws',
+        () => ({ text: 'Pitch by pitch, a screw every rope length. Slow, cold, and solid.', minutes: 45, delta: { stamina: -10, warmth: -6 }, tone: 'good' })),
+      req(has(s, 'tool'), 'Two tools and front points, no protection', 'a second ice tool', (_st, rng) => (rng() < 0.1
+        ? { text: 'Twenty feet below the top, a front point shears out.', minutes: 20, delta: { stamina: -12 }, next: 'slip', tone: 'bad' }
+        : { text: 'Swing, swing, kick, kick. Calves burning, you top out.', minutes: 25, delta: { stamina: -12 }, tone: 'good' })),
+      {
+        label: 'One axe and kicked steps',
+        resolve: (_st, rng) => (rng() < 0.3
+          ? { text: 'Your steps are too shallow in the hard ice, and one breaks.', minutes: 25, delta: { stamina: -15 }, next: 'slip', tone: 'bad' }
+          : { text: 'Chop, kick, balance. It works, barely, and your legs are shaking at the top.', minutes: 35, delta: { stamina: -15, morale: -6 }, tone: 'info' }),
+      },
+      {
+        label: 'Turn back',
+        resolve: () => ({ text: 'Not today. You back off the ice.', turnBack: true, delta: { morale: -8 }, tone: 'info' }),
+      },
+    ],
+  },
+  {
+    id: 'ice_down',
+    title: 'Down the ice',
+    chance: (s, c) => (c.dir === 'down' && hz(s, c).ice ? 1 : 0),
+    text: () => 'Down-climbing steep ice is harder than going up: you can’t see your feet. Most parties rappel or lower off ice screws or V-threads.',
+    choices: (s) => [
+      req(has(s, 'screws') || partnerHas(s, 'screws'), 'Rappel off V-threads and screws', 'ice screws', () => ({ text: 'Thread, clip, rappel, repeat. Slow, but nobody falls.', minutes: 40, delta: { warmth: -8 }, tone: 'good' })),
+      req(has(s, 'tool'), 'Down-climb facing in with two tools', 'a second ice tool', (_st, rng) => (rng() < 0.15
+        ? { text: 'A pick pops out of rotten ice.', minutes: 15, delta: { stamina: -10 }, next: 'slip', tone: 'bad' }
+        : { text: 'Facing in, one placement at a time. Your calves are on fire.', minutes: 30, delta: { stamina: -10 }, tone: 'good' })),
+      {
+        label: 'Face out and plunge-step',
+        resolve: (_st, rng) => (rng() < 0.4
+          ? { text: 'Your heel skates on the hard ice.', minutes: 10, next: 'slip', tone: 'bad' }
+          : { text: 'Somehow, you stay on your feet.', minutes: 20, delta: { morale: -6 }, tone: 'info' }),
+      },
+    ],
+  },
+  {
+    id: 'icefall',
+    title: 'Icefall',
+    repeatable: true,
+    chance: (s, c) => {
+      if (s.usedEvents.filter((e) => e === 'icefall').length >= 1) return 0;
+      const p = hz(s, c).icefall ?? 0;
+      // Seracs let go more once the sun is on them.
+      return p * (minuteOfDay(s.clock) > 600 && !isNight(s.clock, s.season) ? 2 : 1);
+    },
+    text: () => 'A crack like a rifle shot from the ice cliff above. A serac breaks off and blocks of ice come tumbling down the slope.',
+    choices: () => [
+      {
+        label: 'Run for the side of the slope',
+        resolve: (st, rng) => (rng() < 0.07
+          ? { text: 'A block clips you as you run.', ending: 'icefall', tone: 'bad' }
+          : { text: 'You sprint, gasping, as the ice roars past behind you.', delta: { stamina: -10, morale: -10 }, tone: 'info' }),
+      },
+      {
+        label: 'Get behind the nearest boulder',
+        resolve: (st, rng) => (rng() < (has(st, 'helmet') ? 0.05 : 0.12)
+          ? { text: 'The blocks bounce over the rock, and one finds you.', ending: 'icefall', tone: 'bad' }
+          : { text: 'Ice explodes against the boulder and sprays over you. You’re okay.', delta: { morale: -12 }, tone: 'info' }),
+      },
+    ],
+  },
+  {
     id: 'lenticular',
     title: 'Lenticular cloud',
-    chance: (s, c) => (c.dir === 'up' && [2, 3, 4].includes(c.leg) && s.forecast !== 'stable' ? 0.45 : 0),
+    chance: (s, c) => (c.dir === 'up' && hz(s, c).lenticular && s.forecast !== 'stable' ? 0.45 : 0),
     text: () =>
       'A smooth, lens-shaped cloud is forming over the summit. Lenticular clouds mean strong winds aloft, and on Rainier they often come before a storm.',
     choices: () => [
@@ -450,7 +548,7 @@ export const EVENTS: EventDef[] = [
   {
     id: 'wind',
     title: 'Wind on the upper mountain',
-    chance: (s) => (s.node >= 5 && ['windy', 'coldsnap', 'storm'].includes(s.weather) ? 0.7 : 0),
+    chance: (s) => (ft(s) >= 12800 && ['windy', 'coldsnap', 'storm'].includes(s.weather) ? 0.7 : 0),
     text: () => 'Gusts over 40 mph knock you to your knees. With the wind, it feels far below zero, and exposed skin can freeze in minutes.',
     choices: (s) => [
       {
@@ -527,6 +625,48 @@ export const EVENTS: EventDef[] = [
     choices: () => [{ label: 'Swap in the spare batteries', resolve: () => ({ text: 'Fresh batteries, bright light.', minutes: 5, tone: 'info' }) }],
   },
   {
+    id: 'guide_call',
+    title: 'Your guide calls it',
+    chance: (s) => (s.partner === 'guide' && s.dir === 'up' && s.node > 0 && s.node < summitOf(s)
+      && (s.clock > s.turnaround || s.weather === 'storm' || s.weather === 'whiteout' || s.stats.ams > 60 || s.partnerAms > 60) ? 1 : 0),
+    text: (s) => `Your guide stops the team. “${s.clock > s.turnaround ? 'It’s past our turnaround time.' : s.stats.ams > 60 ? 'You’re showing signs of altitude sickness.' : 'This weather isn’t getting better.'} We’re going down.” On a guided climb, that’s final.`,
+    choices: () => [{ label: 'Start down', resolve: () => ({ text: 'You turn around with your guide.', turnBack: true, mutate: (x) => { x.flags.goodCall = true; }, tone: 'good' }) }],
+  },
+  {
+    id: 'veteran_call',
+    title: 'Ash wants to turn around',
+    chance: (s) => (s.partner === 'veteran' && s.dir === 'up' && s.node > routeOf(s).camp && s.node < summitOf(s)
+      && (s.clock > s.turnaround || s.weather === 'storm' || s.weather === 'whiteout') ? 1 : 0),
+    text: (s) => `Ash stops and turns to you. “${s.clock > s.turnaround ? 'We’re past our turnaround.' : 'This weather is the real thing.'} This is where we go down. The mountain will be here next year.”`,
+    choices: () => [
+      { label: 'Agree, and turn around', resolve: () => ({ text: 'Ash nods and starts down. “Good call. Those are the hard ones.”', turnBack: true, delta: { morale: -3 }, mutate: (x) => { x.flags.goodCall = true; }, tone: 'good' }) },
+      { label: 'Argue for one more hour', resolve: () => ({ text: 'Ash shakes their head and starts coiling the rope. You’re going down either way, and now you’re both annoyed.', turnBack: true, delta: { morale: -12 }, tone: 'bad' }) },
+    ],
+  },
+  {
+    id: 'friend_push',
+    title: 'Summit fever',
+    chance: (s) => (s.partner === 'friend' && s.dir === 'up' && !s.summited && s.node > routeOf(s).camp && s.node < summitOf(s)
+      && s.clock > s.turnaround - 30 ? 1 : 0),
+    text: (s) => `Jordan points up the slope. “Come on, it’s right there! Forget the turnaround. When are we ever going to be up here again?” It’s ${formatClockShort(s.clock)}.`,
+    choices: () => [
+      { label: 'Hold the line: we turn around at turnaround', resolve: () => ({ text: 'Jordan groans, then laughs. “Fine. You’re right. Next year.”', turnBack: true, delta: { morale: -6 }, mutate: (x) => { x.flags.goodCall = true; }, tone: 'good' }) },
+      { label: 'Keep going together', resolve: () => ({ text: 'You keep climbing. The snow is getting soft.', delta: { morale: 6 }, tone: 'info' }) },
+    ],
+  },
+  {
+    id: 'nervous_freeze',
+    title: 'Riley freezes',
+    chance: (s, c) => (s.partner === 'firstTimer' && c.dir === 'up' && s.node > routeOf(s).camp
+      && (hz(s, c).slip || hz(s, c).ice || hz(s, c).rockfall) ? 0.35 : 0),
+    text: () => 'Halfway across an exposed traverse, Riley stops and won’t move. “I can’t. I can’t look down.” Their breathing is fast and shallow.',
+    choices: () => [
+      { label: 'Talk them through it, one step at a time', hint: '20 min', resolve: () => ({ text: '“Look at my boots. Step where I step.” Slowly, Riley gets moving again.', minutes: 20, delta: { morale: -2, warmth: -4 }, tone: 'good' }) },
+      { label: 'Short-rope them across', resolve: () => ({ text: 'You shorten the rope and coach them across, taking most of the strain.', minutes: 10, delta: { stamina: -10 }, tone: 'info' }) },
+      { label: 'Turn back together', resolve: () => ({ text: 'Riley is quiet on the way down, then: “Thanks. I want to try again.”', turnBack: true, delta: { morale: -4 }, mutate: (x) => { x.flags.goodCall = true; }, tone: 'good' }) },
+    ],
+  },
+  {
     id: 'sunrise',
     title: 'Sunrise',
     chance: (s) => {
@@ -541,7 +681,7 @@ export const EVENTS: EventDef[] = [
   {
     id: 'balling',
     title: 'Balling up',
-    chance: (s, c) => (c.dir === 'down' && c.leg >= 2 && c.leg <= 5 && minuteOfDay(s.clock) > 600 && s.weather === 'clear' && crampons(s) ? 0.45 : 0),
+    chance: (s, c) => (c.dir === 'down' && hz(s, c).balling && minuteOfDay(s.clock) > 600 && s.weather === 'clear' && crampons(s) ? 0.45 : 0),
     text: () => 'The afternoon sun has turned the snow to mush. It balls up under your crampons into slick platforms.',
     choices: (s) => [
       req(has(s, 'axe'), 'Knock it off with your axe every few steps', 'an ice axe', () => ({ text: 'Tap, tap, step. Tedious, but your points keep biting.', minutes: 15, delta: { stamina: -4 }, tone: 'good' })),

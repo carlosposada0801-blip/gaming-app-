@@ -1,5 +1,17 @@
 import type { Season } from './season';
-export type { Season };
+import type { RouteId } from './routes';
+import type { PartnerId } from './partners';
+export type { Season, RouteId, PartnerId };
+
+/** standard; guided (a guide makes the calls, rents missing gear, lower score); hardcore (one life). */
+export type Mode = 'standard' | 'guided' | 'hardcore';
+
+/** Skill levels 0..5 carried in from your logbook (see src/game/profile.ts). */
+export interface SkillLevels {
+  nav: number;
+  arrest: number;
+  acclim: number;
+}
 
 export type Weather = 'clear' | 'windy' | 'whiteout' | 'coldsnap' | 'storm';
 export type Forecast = 'stable' | 'unsettled' | 'incoming';
@@ -30,7 +42,8 @@ export type EndingId =
   | 'rockfall'
   | 'lost'
   | 'partner'
-  | 'avalanche';
+  | 'avalanche'
+  | 'icefall';
 
 export interface LogEntry {
   clock: number;
@@ -58,13 +71,27 @@ export interface Flags {
   goodCall?: boolean;
   pushedPastTurnaround?: boolean;
   partnerDown?: boolean;
+  /** Your partner was hurt (rockfall without a helmet). */
+  partnerHurt?: boolean;
 }
 
 export interface GameState {
   season: Season;
+  route: RouteId;
+  partner: PartnerId;
+  mode: Mode;
+  skills: SkillLevels;
+  /** Shown to the player; the same seed gives the same forecast and the same dice for the same choices. */
+  seed: string;
+  /** State of the climb's own random number generator. */
+  rngState: number;
+  /** Every skill you performed and how well (0..1), for the logbook and skill levels. */
+  skillLog: { skill: SkillId; perf: number }[];
+  /** The last thing your partner said, if anything new. */
+  partnerSays: string | null;
   packed: string[];
   stats: Stats;
-  /** Index into NODES where the climber currently stands. */
+  /** Index into the route's nodes: the stop the climber is at or last left. */
   node: number;
   dir: 'up' | 'down';
   /** Minutes since midnight on day 1. */
@@ -81,6 +108,8 @@ export interface GameState {
   water: number; // liters carried
   food: number; // servings left
   slept: boolean;
+  /** Bivouac stops already slept at on the way up. */
+  bivied: number[];
   campLeft: boolean;
   turnaround: number; // clock value on day 2
   /** When you plan to leave Camp Muir on summit day (clock). */
@@ -120,6 +149,8 @@ export interface Outcome {
   turnBack?: boolean;
   tone?: 'good' | 'bad' | 'info';
   mutate?: (s: GameState) => void;
+  /** An event that follows at once (e.g. a slip after a front point shears out). */
+  next?: string;
 }
 
 /** Hands-on skills the player performs as a mini-game (Phase 2). */

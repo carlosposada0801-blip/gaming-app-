@@ -37,7 +37,7 @@ const workDrop = (pace: Pace | null) => (pace === 'push' ? 4 : pace === 'steady'
 
 /** How a reading compares with what's typical here and now: a few points low is a warning. */
 export function oxConcern(spo2: number, s: GameState, pace: Pace | null): 'ok' | 'low' | 'very low' {
-  const typical = baseline(elevAt(s.dist)) - workDrop(pace);
+  const typical = baseline(elevAt(s)) - workDrop(pace);
   if (spo2 < typical - 6) return 'very low';
   if (spo2 < typical - 3) return 'low';
   return 'ok';
@@ -50,7 +50,7 @@ export interface PulseOx {
 
 /** Your reading. `pace` is null when standing still. */
 export function readPulseOx(s: GameState, pace: Pace | null): PulseOx {
-  const elev = elevAt(s.dist);
+  const elev = elevAt(s);
   const spo2 = baseline(elev) - workDrop(pace) - s.stats.ams * 0.07 - (s.stats.hydration < 25 ? 1 : 0) + wobble(s.clock, 1);
   const rest = 64 + 5 * (elev / 1000);
   const effort = pace === 'push' ? 82 : pace === 'steady' ? 62 : pace === 'rest' ? 45 : 0;
@@ -64,7 +64,7 @@ export function readPulseOx(s: GameState, pace: Pace | null): PulseOx {
 
 /** Your partner's reading: same height, their own altitude sickness. */
 export function readPartnerOx(s: GameState, pace: Pace | null): PulseOx {
-  const elev = elevAt(s.dist);
+  const elev = elevAt(s);
   const spo2 = baseline(elev) - workDrop(pace) - s.partnerAms * 0.1 + wobble(s.clock, 3);
   const effort = pace === 'push' ? 80 : pace === 'steady' ? 60 : pace === 'rest' ? 44 : 0;
   const hr = 66 + 5 * (elev / 1000) + effort + s.partnerAms * 0.25 + wobble(s.clock, 4) * 3;

@@ -17,6 +17,7 @@ export function SkillGame({
   slopeDeg,
   anchor,
   note,
+  allowDice = true,
   onDone,
 }: {
   skill: SkillId;
@@ -26,6 +27,8 @@ export function SkillGame({
   anchor: string;
   /** Why this will be harder than it looks (numb fingers, mittens). */
   note?: string;
+  /** Hardcore mode: no "Let the dice decide". */
+  allowDice?: boolean;
   onDone: (perf: number | undefined) => void;
 }) {
   const [result, setResult] = useState<number | null>(null);
@@ -52,17 +55,19 @@ export function SkillGame({
             {skill === 'prusik' && <Prusik onDone={finish} />}
             {skill === 'zpulley' && <ZPulley anchor={anchor} onDone={finish} />}
             {skill === 'ladder' && <Ladder onDone={finish} />}
-            <Pressable
-              onPress={() => {
-                if (finished.current) return;
-                finished.current = true;
-                onDone(undefined);
-              }}
-              hitSlop={8}
-              accessibilityRole="button"
-            >
-              <Text style={styles.skip}>Let the dice decide</Text>
-            </Pressable>
+            {allowDice ? (
+              <Pressable
+                onPress={() => {
+                  if (finished.current) return;
+                  finished.current = true;
+                  onDone(undefined);
+                }}
+                hitSlop={8}
+                accessibilityRole="button"
+              >
+                <Text style={styles.skip}>Let the dice decide</Text>
+              </Pressable>
+            ) : null}
           </>
         ) : (
           <View style={styles.result}>

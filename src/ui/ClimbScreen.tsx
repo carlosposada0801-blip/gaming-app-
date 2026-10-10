@@ -4,14 +4,14 @@ import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import * as Haptics from 'expo-haptics';
 import {
   HAND_LABEL, LAYER_LABEL, WEATHER_LABEL, atStop, chooseEvent, clone, currentFt, doAction, elevAt, eventChoices, handOuter,
-  handicapNote, listActions, moveBlockedReason, partTrend, roped, warmthTrend, type Action,
+  handicapNote, listActions, moveBlockedReason, partTrend, recommendChoice, roped, routeOf, summitOf, warmthTrend, type Action,
 } from '../game/engine';
 import {
   TIME_SCALE, beatSeconds, breathsPerStep, legAt, metersToNext, nextStopName, restStepActive, speed, walkMut,
 } from '../game/movement';
 import { ENDINGS } from '../game/endings';
 import { EVENT_BY_ID } from '../game/events';
-import { LEGS, NODES, SUMMIT, dayOf, formatClock, formatFt } from '../game/route';
+import { dayOf, formatClock, formatFt } from '../game/route';
 import type { GameState, LogEntry, Pace, Stats } from '../game/types';
 import { MountainScene, type CameraControl, type LiveMove } from '../scene/MountainScene';
 import { RestStep } from './RestStep';
@@ -52,10 +52,13 @@ export function ClimbScreen({
   state,
   onState,
   onFinish,
+  onPhoto,
 }: {
   state: GameState;
   onState: (s: GameState) => void;
   onFinish: () => void;
+  /** Called with the summit photo's URI when it is taken. */
+  onPhoto?: (uri: string | null) => void;
 }) {
   const insets = useSafeAreaInsets();
   const { height } = useWindowDimensions();
@@ -64,6 +67,26 @@ export function ClimbScreen({
   const [overview, setOverview] = useState(false);
   const [sheet, setSheet] = useState<'none' | 'options' | 'notes'>('none');
   const [skillRun, setSkillRun] = useState<{ index: number; skill: SkillId } | null>(null);
+  const shot = useRef<(() => Promise<string | null>) | null>(null);
+
+  // Summit photo: a moment after topping out, from the follow camera.
+  useEffect(() => {
+    if (!state.summited) return;
+    const id = setTimeout(() => {
+      shot.current?.().then((uri) => onPhoto?.(uri)).catch(() => onPhoto?.(null));
+    }, 600);
+    return () => clearTimeout(id);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [state.summited]);
+
+  // Your partner speaks up: a speech bubble for a few seconds.
+  const [bubble, setBubble] = useState<string | null>(null);
+  useEffect(() => {
+    if (!state.partnerSays) return;
+    setBubble(state.partnerSays);
+    const id = setTimeout(() => setBubble(null), 7000);
+    return () => clearTimeout(id);
+  }, [state.partnerSays]);
 
   const drag = useRef({ yaw: 0, dist: 8 });
   const pan = useMemo(
@@ -171,7 +194,7 @@ export function ClimbScreen({
         // "Right" on screen is right of the way you face.
         const side = (w.dir === 'up' ? 1 : -1) * (Math.abs(x) > 0.12 ? x : 0);
         const node0 = w.node;
-        const moved = walkMut(w, meters, { pace, rhythm: rhythm.current, lateral: w.lateral + side * 2.5 * dt }, Math.random);
+        const moved = walkMut(w, meters, { pace, rhythm: rhythm.current, lateral: w.lateral + side * 2.5 * dt });
         moving = moved > 0;
         live.current = { dist: w.dist, lateral: w.lateral, speed: moved / Math.max(dt, 1e-3) };
         const arrived = w.node !== node0;
@@ -206,7 +229,8 @@ export function ClimbScreen({
     commit(doAction(base, id));
   };
 
-  const node = NODES[state.node];
+  const R = routeOf(state);
+  const node = R.nodes[state.node];
   // Walking replaces the old "Climb to X" buttons: drop every go:* action.
   const actions = listActions(state).filter((a) => !a.id.startsWith('go:'));
   const primary = actions.filter((a) => a.primary);
@@ -215,12 +239,12 @@ export function ClimbScreen({
   const stopped = atStop(state);
   const next = nextStopName(state);
   const toNext = metersToNext(state);
-  const place = stopped ? node.name : LEGS[legAt(state.dist)].name;
-  const elevM = elevAt(state.dist);
+  const place = stopped ? node.name : R.legs[legAt(state)].name;
+  const elevM = elevAt(state);
   const showRhythm = restStepActive(state) && !state.ending && !state.pendingEvent;
   const [panelH, setPanelH] = useState(220);
   // On top, pushing forward starts the descent, so the summit message doesn't block the stick.
-  const onTop = state.node === SUMMIT && state.dir === 'up';
+  const onTop = state.node === summitOf(state) && state.dir === 'up';
   const blocked = onTop ? undefined : moveBlockedReason(state);
   const trend = warmthTrend(state);
   const handTrend = partTrend(state, 'hands');
@@ -228,6 +252,12 @@ export function ClimbScreen({
   const ox = has(state, 'oximeter') ? readPulseOx(state, pace) : null;
   const partnerOx = ox ? readPartnerOx(state, pace) : null;
   const event = state.pendingEvent ? EVENT_BY_ID[state.pendingEvent] : null;
+  // Guided climbs: the guide points at the choice they'd make.
+  const guidePick = useMemo(
+    () => (event && state.mode === 'guided' ? recommendChoice(state) : -1),
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [state.pendingEvent, state.mode],
+  );
   const ending = state.ending ? ENDINGS[state.ending] : null;
 
   return (
@@ -248,6 +278,8 @@ export function ClimbScreen({
           live={live}
           paused={!!skillRun}
           season={state.season}
+          route={state.route}
+          shot={shot}
         />
       </View>
       <View style={StyleSheet.absoluteFill} {...pan.panHandlers} />
@@ -333,6 +365,12 @@ export function ClimbScreen({
         </View>
       </View>
 
+      {bubble && !event && !ending ? (
+        <View style={[styles.bubble, { bottom: panelH + 150 }]} pointerEvents="none" accessibilityLiveRegion="polite">
+          <Text style={styles.bubbleText}>{bubble}</Text>
+        </View>
+      ) : null}
+
       {/* ---------- controls over the scene ---------- */}
       {!ending && !event && (
         <View style={[styles.controls, { bottom: panelH + 10 }]} pointerEvents="box-none">
@@ -356,7 +394,7 @@ export function ClimbScreen({
         ) : (
           <>
             <Text style={state.lastOutcome ? styles.outcome : styles.caption} numberOfLines={4}>
-              {state.lastOutcome ?? (stopped ? node.desc : `${LEGS[legAt(state.dist)].name}.`)}
+              {state.lastOutcome ?? (stopped ? node.desc : `${R.legs[legAt(state)].name}.`)}
             </Text>
             {onTop ? <Text style={styles.toNext}>Push the stick forward to start down.</Text> : null}
             {next ? (
@@ -456,13 +494,14 @@ export function ClimbScreen({
         <SkillGame
           skill={skillRun.skill}
           title={event.title}
-          slopeDeg={LEGS[legOf(state)].slopeDeg}
+          slopeDeg={R.legs[legOf(state)].slopeDeg}
           anchor={anchorStep(state)}
           note={handicapNote(state, skillRun.skill)}
+          allowDice={state.mode !== 'hardcore'}
           onDone={(perf) => {
             const idx = skillRun.index;
             setSkillRun(null);
-            commit(chooseEvent(stateRef.current, idx, Math.random, perf));
+            commit(chooseEvent(stateRef.current, idx, undefined, perf));
           }}
         />
       )}
@@ -486,6 +525,7 @@ export function ClimbScreen({
                     accessibilityState={{ disabled: !!ch.disabled }}
                   >
                     <Text style={styles.rowText}>{ch.label}</Text>
+                    {i === guidePick ? <Text style={styles.guidePick}>Your guide’s call</Text> : null}
                     {ch.hint ? <Text style={styles.choiceHint}>{ch.hint}</Text> : null}
                   </Pressable>
                 ))}
@@ -590,6 +630,12 @@ const styles = StyleSheet.create({
   rowText: { color: C.text, fontSize: 15, fontWeight: '700' },
   rowDetail: { color: C.muted, fontSize: 12, marginTop: 2 },
   choiceHint: { color: C.warn, fontSize: 12, marginTop: 3 },
+  guidePick: { color: C.good, fontSize: 12, fontWeight: '800', marginTop: 3 },
+  bubble: {
+    position: 'absolute', left: 16, right: 16, backgroundColor: 'rgba(231,238,245,0.94)', borderRadius: 14,
+    paddingVertical: 9, paddingHorizontal: 13,
+  },
+  bubbleText: { color: '#0c141e', fontSize: 14, lineHeight: 19, fontWeight: '600' },
   note: { flexDirection: 'row', gap: 10 },
   noteClock: { color: C.faint, fontSize: 12, width: 64 },
   noteText: { color: C.muted, fontSize: 13, lineHeight: 18, flex: 1 },

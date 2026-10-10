@@ -8,11 +8,11 @@
 // Camp Muir the rest-step rhythm can save or waste stamina.
 import {
   PACE_AMS, PACE_STAMINA, canMove, checkVitals, clampStats, clone, elevAt, fmtDuration, has, legMinutes, log,
-  rollEvent, thermal, updateWeather,
+  profileOf, rollEvent, routeOf, stateRng, summitOf, thermal, updateWeather,
 } from './engine';
-import { NODE_DIST } from './data/routeProfile';
+import { partnerLine } from './partners';
 import { packWeightLb } from './gear';
-import { DAY, LEGS, MUIR, NODES, SUMMIT, formatClock, formatFt, isNight } from './route';
+import { DAY, formatClock, formatFt, isNight } from './route';
 import type { GameState, Pace, Rng } from './types';
 import { SEASONS } from './season';
 
@@ -30,26 +30,27 @@ export interface Stride {
 }
 
 /** Leg containing a distance along the route. */
-export function legAt(d: number) {
-  for (let i = 0; i < LEGS.length; i++) if (d < NODE_DIST[i + 1]) return i;
-  return LEGS.length - 1;
+export function legAt(s: GameState, d = s.dist) {
+  const nd = profileOf(s).nodeDist;
+  const n = routeOf(s).legs.length;
+  for (let i = 0; i < n; i++) if (d < nd[i + 1]) return i;
+  return n - 1;
 }
 
-export const legLength = (i: number) => NODE_DIST[i + 1] - NODE_DIST[i];
+export const legLength = (s: GameState, i: number) => profileOf(s).nodeDist[i + 1] - profileOf(s).nodeDist[i];
 
-/** How far you can stray from the boot track on each leg (m). */
-const CORRIDOR = [3, 30, 6, 4, 10, 10, 15];
-export const corridor = (d: number) => CORRIDOR[legAt(d)];
+/** How far you can stray from the boot track here (m). */
+export const corridor = (s: GameState, d = s.dist) => routeOf(s).legs[legAt(s, d)].corridor;
 
 /** Off the track by more than this and you're breaking trail. */
 export const ON_TRACK_M = 1.5;
 
 /** The stop the party is walking toward, or null when standing on top waiting to start down. */
 export function targetNode(s: GameState): number | null {
-  const at = NODE_DIST[s.node];
+  const at = profileOf(s).nodeDist[s.node];
   if (s.dir === 'up') {
     if (s.dist < at - 1) return s.node; // went back below the last stop, heading up to it again
-    return s.node >= SUMMIT ? null : s.node + 1;
+    return s.node >= summitOf(s) ? null : s.node + 1;
   }
   if (s.dist > at + 1) return s.node; // turned back mid-leg: first return to the stop below
   return s.node > 0 ? s.node - 1 : null;
@@ -57,14 +58,14 @@ export function targetNode(s: GameState): number | null {
 
 /** Walking speed (m per game minute) at a pace, on the leg you're on. */
 export function speed(s: GameState, pace: Pace) {
-  const i = legAt(s.dist);
+  const i = legAt(s);
   const minutes = legMinutes(s, pace, i);
-  return minutes > 0 ? legLength(i) / minutes : 0;
+  return minutes > 0 ? legLength(s, i) / minutes : 0;
 }
 
-/** Rest-stepping matters on the upper mountain, going up. */
+/** Rest-stepping matters on the upper mountain (above high camp), going up. */
 export function restStepActive(s: GameState) {
-  return s.dir === 'up' && s.dist >= NODE_DIST[MUIR] - 1 && s.node < SUMMIT;
+  return s.dir === 'up' && s.dist >= profileOf(s).nodeDist[routeOf(s).camp] - 1 && s.node < summitOf(s);
 }
 
 /**
@@ -90,10 +91,12 @@ function altitudeFactor(elevM: number) {
  * Walk `meters` along the route (positive = in the direction of travel, negative = back).
  * Mutates `s`. Returns the meters actually covered (0 if blocked).
  */
-export function walkMut(s: GameState, meters: number, stride: Stride, rng: Rng): number {
+export function walkMut(s: GameState, meters: number, stride: Stride, rng: Rng = stateRng(s)): number {
   if (s.ending || s.pendingEvent || meters === 0) return 0;
   // On top, pushing forward starts the descent.
-  if (s.dir === 'up' && s.node === SUMMIT && meters > 0) {
+  const R = routeOf(s);
+  const nodeDist = profileOf(s).nodeDist;
+  if (s.dir === 'up' && s.node === summitOf(s) && meters > 0) {
     s.dir = 'down';
     log(s, 'Starting down from Columbia Crest.', 'info');
   }
@@ -101,8 +104,8 @@ export function walkMut(s: GameState, meters: number, stride: Stride, rng: Rng):
   const target = targetNode(s);
   if (target === null) return 0;
 
-  const from = NODE_DIST[s.node];
-  const to = NODE_DIST[target];
+  const from = nodeDist[s.node];
+  const to = nodeDist[target];
   const forward = Math.sign(to - from) || (s.dir === 'up' ? 1 : -1);
   const lo = Math.min(from, to);
   const hi = Math.max(from, to);
@@ -114,18 +117,19 @@ export function walkMut(s: GameState, meters: number, stride: Stride, rng: Rng):
   // Leaving a stop.
   if (Math.abs(d0 - from) < 1) {
     s.legStart = s.clock;
-    if (s.dir === 'up' && s.node === MUIR) s.campLeft = true; // sleeping bag, pad, stove stay at Muir
+    if (s.dir === 'up' && s.node === R.camp) s.campLeft = true; // sleeping bag, pad, stove stay at camp
   }
 
-  const i = legAt((d0 + d1) / 2);
-  const e0 = elevAt(d0);
-  const e1 = elevAt(d1);
+  const i = legAt(s, (d0 + d1) / 2);
+  const leg = R.legs[i];
+  const e0 = elevAt(s, d0);
+  const e1 = elevAt(s, d1);
   const gainFt = Math.max(0, e1 - e0) * M_TO_FT;
   const lossFt = Math.max(0, e0 - e1) * M_TO_FT;
-  const minutes = moved * (legMinutes(s, stride.pace, i) / legLength(i));
+  const minutes = moved * (legMinutes(s, stride.pace, i) / legLength(s, i));
   const hours = minutes / 60;
 
-  s.lateral = Math.max(-CORRIDOR[i], Math.min(CORRIDOR[i], stride.lateral));
+  s.lateral = Math.max(-leg.corridor, Math.min(leg.corridor, stride.lateral));
   const offTrack = Math.abs(s.lateral) > ON_TRACK_M;
   if (offTrack) s.legOffTrack += moved;
 
@@ -137,11 +141,11 @@ export function walkMut(s: GameState, meters: number, stride: Stride, rng: Rng):
   if (s.stats.energy < 25) cost *= 1.4;
   if (s.stats.hydration < 25) cost *= 1.3;
   if (s.stats.ams > 70) cost *= 1.3;
-  if (i <= 1 && !has(s, 'poles')) cost *= 1.08;
-  if (i >= 1 && has(s, 'boots_hiking')) cost *= 1.12;
+  if (i < R.camp && !has(s, 'poles')) cost *= 1.08;
+  if (leg.terrain !== 'trail' && has(s, 'boots_hiking')) cost *= 1.12;
   if (s.weather === 'storm' || s.weather === 'whiteout') cost *= 1.2;
   if (offTrack) cost *= 1.3; // post-holing in untracked snow
-  if (i <= 1 && SEASONS[s.season].softSnow && !has(s, 'snowshoes')) cost *= 1.2; // spring: sinking in
+  if (i < R.camp && SEASONS[s.season].softSnow && !has(s, 'snowshoes')) cost *= 1.2; // spring: sinking in
   if (s.flags.frostbiteFeet) cost *= 1.15;
   if (restStepActive(s) && forward * (d1 - d0) > 0) cost *= 1.15 - 0.4 * Math.max(0, Math.min(1, stride.rhythm));
   s.stats.stamina -= cost;
@@ -177,10 +181,12 @@ export function walkMut(s: GameState, meters: number, stride: Stride, rng: Rng):
 
 /** Arriving at a stop: the per-leg effects and checks that used to run at the end of a leg. */
 function arriveMut(s: GameState, to: number, rng: Rng) {
+  const R = routeOf(s);
+  const NODES = R.nodes;
   const from = s.node;
   const leg = Math.min(from, to);
   const minutes = s.clock - s.legStart;
-  s.dist = NODE_DIST[to];
+  s.dist = profileOf(s).nodeDist[to];
 
   if (to === from) {
     // Back at the stop you had left.
@@ -202,15 +208,15 @@ function arriveMut(s: GameState, to: number, rng: Rng) {
   else if (s.weather === 'clear') s.stats.morale += 2;
   if (s.stats.ams > 40) s.stats.morale -= 4;
 
-  if (s.dir === 'up' && leg === 1 && has(s, 'wands')) {
+  if (s.dir === 'up' && R.legs[leg].hazards.whiteout && has(s, 'wands') && !s.flags.wandsPlaced) {
     s.flags.wandsPlaced = true;
     log(s, 'You placed wands every rope length across the snowfield.', 'info');
   }
-  if (s.dir === 'down' && to === MUIR) s.campLeft = false;
+  if (s.dir === 'down' && to === R.camp) s.campLeft = false;
 
   const verb = s.dir === 'up' ? 'Reached' : 'Down to';
   log(s, `${verb} ${NODES[to].name} (${formatFt(NODES[to].ft)}) after ${fmtDuration(minutes)}.`);
-  if (s.dir === 'up' && to === SUMMIT) s.summited = true;
+  if (s.dir === 'up' && to === summitOf(s)) s.summited = true;
   if (s.dir === 'up' && s.clock > s.turnaround && s.clock > DAY && !s.flags.pushedPastTurnaround) {
     s.flags.pushedPastTurnaround = true;
     log(s, `Past your ${formatClock(s.turnaround)} turnaround time. Snow bridges soften and rockfall picks up as the day warms.`, 'bad');
@@ -229,27 +235,32 @@ function arriveMut(s: GameState, to: number, rng: Rng) {
   if (s.ending) return;
   if (s.dir === 'down' && s.node === 0) {
     s.ending = s.summited ? 'summit' : 'retreat';
-    log(s, 'Back at the Paradise parking lot.', 'good');
+    log(s, `Back at the ${NODES[0].name} trailhead.`, 'good');
     return;
   }
   rollEvent(s, ctx, rng);
+  const line = partnerLine(s);
+  if (line) {
+    s.partnerSays = line;
+    log(s, line, 'info');
+  }
 }
 
 /** Pure version for callers that keep immutable state. */
-export function walk(prev: GameState, meters: number, stride: Stride, rng: Rng = Math.random): GameState {
+export function walk(prev: GameState, meters: number, stride: Stride, rng?: Rng): GameState {
   const s = clone(prev);
-  walkMut(s, meters, stride, rng);
+  walkMut(s, meters, stride, rng ?? stateRng(s));
   return s;
 }
 
 /** Name of the stop ahead, for the HUD. */
 export function nextStopName(s: GameState) {
   const t = targetNode(s);
-  return t === null ? null : NODES[t].name;
+  return t === null ? null : routeOf(s).nodes[t].name;
 }
 
 /** Meters to the stop ahead. */
 export function metersToNext(s: GameState) {
   const t = targetNode(s);
-  return t === null ? 0 : Math.abs(NODE_DIST[t] - s.dist);
+  return t === null ? 0 : Math.abs(profileOf(s).nodeDist[t] - s.dist);
 }

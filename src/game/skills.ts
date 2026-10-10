@@ -1,13 +1,14 @@
 // How a performed skill turns into an outcome. Each function keeps the event's original outcome
 // shape and only moves the numbers: the gear checks that decide which options exist stay in
 // events.ts. Performance `perf` is 0 (botched) .. 1 (textbook).
-import { crampons, has } from './helpers';
-import { LEGS } from './route';
+import { crampons, has, routeOf } from './helpers';
+import { partnerHas, partnerOf } from './partners';
 import type { GameState, Outcome } from './types';
 
 /** The leg the party is on (or just finished), for its slope. */
 export function legOf(s: GameState) {
-  return Math.max(0, Math.min(LEGS.length - 1, s.dir === 'up' ? s.node - 1 : s.node));
+  const n = routeOf(s).legs.length;
+  return Math.max(0, Math.min(n - 1, s.dir === 'up' ? s.node - 1 : s.node));
 }
 
 /**
@@ -15,13 +16,14 @@ export function legOf(s: GameState) {
  * crampon points (which catch, flip you, and are a reason to keep your feet up) make it harder.
  */
 export function arrestOdds(s: GameState, perf: number) {
-  const slope = LEGS[legOf(s)].slopeDeg;
-  let p = 0.15 + 0.95 * perf;
+  const slope = routeOf(s).legs[legOf(s)].slopeDeg;
+  let p = 0.15 + 0.95 * perf + 0.03 * s.skills.arrest;
   p -= Math.max(0, slope - 28) * 0.012;
   if (s.flags.cramponsDull) p -= 0.08;
   if (!crampons(s)) p -= 0.05;
   // Self-arrest on hard, bare ice often fails: the pick skates instead of biting.
   if (s.season === 'september') p -= 0.1;
+  if (routeOf(s).legs[legOf(s)].terrain === 'ice') p -= 0.2;
   return Math.max(0.02, Math.min(0.97, p));
 }
 
@@ -51,14 +53,16 @@ export function prusikOutcome(perf: number): Outcome {
  * season the glacier is hard ice where a picket won't drive in; ice screws are quick there.
  */
 export function anchorMinutes(s: GameState) {
-  if (s.season === 'september') return has(s, 'screws') ? 50 : has(s, 'picket') ? 65 : 75;
-  return has(s, 'picket') ? 50 : 75;
+  const any = (id: string) => has(s, id) || partnerHas(s, id);
+  const base = s.season === 'september' ? (any('screws') ? 50 : any('picket') ? 65 : 75) : any('picket') ? 50 : 75;
+  return Math.round(base * partnerOf(s).rigging);
 }
 
 /** Helping your partner build a 3:1 Z-pulley: rigging in the right order, then hauling together. */
 export function zpulleyOutcome(s: GameState, perf: number): Outcome {
   const base = anchorMinutes(s);
-  const anchor = s.season === 'september' && has(s, 'screws') ? 'Screws in the ice' : has(s, 'picket') ? 'Picket buried' : 'An axe anchor';
+  const any = (id: string) => has(s, id) || partnerHas(s, id);
+  const anchor = s.season === 'september' && any('screws') ? 'Screws in the ice' : any('picket') ? 'Picket buried' : 'An axe anchor';
   const slack = 1 - perf;
   return {
     text: perf > 0.75
@@ -90,7 +94,7 @@ export function ladderOutcome(perf: number): Outcome {
 
 /** The first rigging step of a Z-pulley, by the anchor you can build here. */
 export function anchorStep(s: GameState) {
-  if (s.season === 'september' && has(s, 'screws')) return 'Twist two ice screws into the hard ice';
-  if (has(s, 'picket')) return s.season === 'september' ? 'Chop a slot in the ice and bury the picket sideways' : 'Bury a picket as the anchor';
+  if (s.season === 'september' && (has(s, 'screws') || partnerHas(s, 'screws'))) return 'Twist two ice screws into the hard ice';
+  if (has(s, 'picket') || partnerHas(s, 'picket')) return s.season === 'september' ? 'Chop a slot in the ice and bury the picket sideways' : 'Bury a picket as the anchor';
   return 'Bury an ice axe as the anchor';
 }

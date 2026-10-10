@@ -2,7 +2,10 @@ import { useMemo } from 'react';
 import { Pressable, SectionList, StyleSheet, Text, View } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { CATEGORIES, GEAR, GEAR_BY_ID, packWeightLb, recommendedFor, toggleGear, type Gear } from '../game/gear';
-import { SEASONS, SEASON_IDS, type Season } from '../game/season';
+import { PARTNERS } from '../game/partners';
+import { ROUTES } from '../game/routes';
+import { SEASONS } from '../game/season';
+import type { Plan } from './PlanScreen';
 import { C, NUM } from './theme';
 
 function fmtWeight(oz: number) {
@@ -12,19 +15,20 @@ function fmtWeight(oz: number) {
 export function PackScreen({
   packed,
   setPacked,
-  season,
-  setSeason,
+  plan,
   onStart,
   onBack,
 }: {
   packed: string[];
   setPacked: (ids: string[]) => void;
-  season: Season;
-  setSeason: (s: Season) => void;
+  plan: Plan;
   onStart: () => void;
   onBack: () => void;
 }) {
   const insets = useSafeAreaInsets();
+  const season = plan.season;
+  const route = ROUTES[plan.route];
+  const partner = PARTNERS[plan.mode === 'guided' ? 'guide' : plan.partner];
   const sections = useMemo(
     () => CATEGORIES.map((cat) => ({ title: cat, data: GEAR.filter((g) => g.cat === cat) })),
     [],
@@ -41,23 +45,13 @@ export function PackScreen({
           <Text style={styles.back}>{'‹'} Back</Text>
         </Pressable>
         <Text style={styles.h1}>Pack your gear</Text>
-        <Text style={styles.sub}>
-          Two days on the Disappointment Cleaver route: Paradise to Camp Muir, a few hours of sleep, then a midnight start for the summit.
+        <Text style={styles.planLine}>
+          {plan.daily ? 'DAILY CLIMB · ' : ''}{route.name.toUpperCase()} · {SEASONS[season].label.toUpperCase()} · WITH {partner.name.toUpperCase()}
         </Text>
-        <View style={styles.seasons} accessibilityRole="radiogroup">
-          {SEASON_IDS.map((id) => (
-            <Pressable
-              key={id}
-              onPress={() => setSeason(id)}
-              style={[styles.seasonBtn, season === id && styles.seasonOn]}
-              accessibilityRole="radio"
-              accessibilityState={{ selected: season === id }}
-            >
-              <Text style={[styles.seasonText, season === id && { color: '#1a0b03' }]}>{SEASONS[id].label}</Text>
-            </Pressable>
-          ))}
-        </View>
-        <Text style={styles.seasonBlurb}>{SEASONS[season].blurb}</Text>
+        <Text style={styles.sub}>
+          {route.bivouacs.length ? 'Three days' : 'Two days'}: {route.nodes[0].name} to {route.nodes[route.camp].name}, a few hours of sleep, then an alpine start for the summit.
+          {plan.mode === 'guided' ? ' Your guide will rent you any climbing gear you forget.' : ''}
+        </Text>
         <View style={styles.weights}>
           <View style={styles.weightBox}>
             <Text style={styles.weightLabel}>TO CAMP MUIR</Text>
@@ -73,7 +67,7 @@ export function PackScreen({
           </View>
         </View>
         <View style={styles.quick}>
-          <Pressable style={styles.quickBtn} onPress={() => setPacked(recommendedFor(season))} accessibilityRole="button">
+          <Pressable style={styles.quickBtn} onPress={() => setPacked(recommendedFor(season, plan.route))} accessibilityRole="button">
             <Text style={styles.quickText}>Use a guide's {SEASONS[season].label} list</Text>
           </Pressable>
           <Pressable style={styles.quickBtn} onPress={() => setPacked([])} accessibilityRole="button">
@@ -92,7 +86,7 @@ export function PackScreen({
           <GearRow
             gear={item}
             on={packed.includes(item.id)}
-            seasonal={SEASONS[season].extraGear.includes(item.id) ? SEASONS[season].label : undefined}
+            seasonal={SEASONS[season].extraGear.includes(item.id) ? SEASONS[season].label : route.extraGear.includes(item.id) ? `the ${route.name}` : undefined}
             onPress={() => setPacked(toggleGear(packed, item.id))}
           />
         )}
@@ -104,7 +98,7 @@ export function PackScreen({
         ) : heavy ? (
           <Text style={styles.footNote}>Heavy pack. Every pound costs stamina on the way up.</Text>
         ) : (
-          <Text style={styles.footNote}>Camp gear stays at Muir on summit day.</Text>
+          <Text style={styles.footNote}>Camp gear stays at high camp on summit day.</Text>
         )}
         <Pressable
           style={[styles.start, noBoots && { opacity: 0.4 }]}
@@ -112,7 +106,7 @@ export function PackScreen({
           onPress={onStart}
           accessibilityRole="button"
         >
-          <Text style={styles.startText}>Drive to Paradise</Text>
+          <Text style={styles.startText}>Drive to {route.nodes[0].name}</Text>
         </Pressable>
       </View>
     </View>
@@ -135,7 +129,7 @@ function GearRow({ gear, on, seasonal, onPress }: { gear: Gear; on: boolean; sea
           <Text style={[styles.name, !on && { color: C.muted }]} numberOfLines={2}>{gear.name}</Text>
           <Text style={[styles.oz, NUM]}>{fmtWeight(gear.oz)}</Text>
         </View>
-        {seasonal ? <Text style={styles.tag}>Guides add this in {seasonal}</Text> : null}
+        {seasonal ? <Text style={styles.tag}>Guides add this for {seasonal}</Text> : null}
         <Text style={styles.note}>{gear.note}</Text>
       </View>
     </Pressable>
@@ -153,11 +147,7 @@ const styles = StyleSheet.create({
   weightLabel: { color: C.faint, fontSize: 10, fontWeight: '700', letterSpacing: 1 },
   weightNum: { color: C.text, fontSize: 20, fontWeight: '700', marginTop: 2 },
   quick: { flexDirection: 'row', gap: 8 },
-  seasons: { flexDirection: 'row', gap: 6 },
-  seasonBtn: { flex: 1, borderWidth: 1, borderColor: C.line, borderRadius: 10, paddingVertical: 8, alignItems: 'center' },
-  seasonOn: { backgroundColor: C.accent, borderColor: C.accent },
-  seasonText: { color: C.text, fontSize: 14, fontWeight: '700' },
-  seasonBlurb: { color: C.muted, fontSize: 13, lineHeight: 18 },
+  planLine: { color: C.ice, fontSize: 11, fontWeight: '800', letterSpacing: 1.1 },
   tag: { color: C.warn, fontSize: 11, fontWeight: '700', marginTop: 3 },
   quickBtn: { borderWidth: 1, borderColor: C.line, borderRadius: 999, paddingVertical: 7, paddingHorizontal: 14 },
   quickText: { color: C.ice, fontSize: 13, fontWeight: '600' },

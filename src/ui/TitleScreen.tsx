@@ -1,19 +1,35 @@
 import { useMemo, useRef } from 'react';
 import { Pressable, StyleSheet, Text, View } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
-import { newGame } from '../game/engine';
+import { dailyClimb, newGame } from '../game/engine';
 import { ENDINGS } from '../game/endings';
 import { RECOMMENDED } from '../game/gear';
 import { DAY, NODES, SUMMIT, formatFt } from '../game/route';
+import { PARTNERS } from '../game/partners';
+import { SEASONS } from '../game/season';
 import { MountainScene, type CameraControl } from '../scene/MountainScene';
 import type { Best } from './storage';
 import { C, NUM, climberLook, partnerLook } from './theme';
 
-export function TitleScreen({ best, onStart }: { best: Best | null; onStart: () => void }) {
+export function TitleScreen({
+  best,
+  dailyScore,
+  onStart,
+  onDaily,
+  onLogbook,
+}: {
+  best: Best | null;
+  /** Today's Daily Climb score, if you've played it. */
+  dailyScore?: number;
+  onStart: () => void;
+  onDaily: () => void;
+  onLogbook: () => void;
+}) {
+  const daily = useMemo(() => dailyClimb(), []);
   const insets = useSafeAreaInsets();
   const control = useRef<CameraControl>({ yaw: 0, dist: 6, overview: false });
   // A sample party for the backdrop; the orbit camera never shows them up close.
-  const demo = useMemo(() => newGame(RECOMMENDED, () => 0.5), []);
+  const demo = useMemo(() => newGame(RECOMMENDED, { rng: () => 0.5 }), []);
 
   return (
     <View style={styles.root}>
@@ -32,7 +48,7 @@ export function TitleScreen({ best, onStart }: { best: Best | null; onStart: () 
       </View>
 
       <View style={[styles.top, { paddingTop: insets.top + 24 }]} pointerEvents="none">
-        <Text style={styles.eyebrow}>MOUNT RAINIER · DISAPPOINTMENT CLEAVER</Text>
+        <Text style={styles.eyebrow}>MOUNT RAINIER · FOUR ROUTES</Text>
         <Text style={styles.title}>Summit{'\n'}Rainier</Text>
         <Text style={[styles.elev, NUM]}>
           {formatFt(NODES[0].ft)} → {formatFt(NODES[SUMMIT].ft)}
@@ -41,8 +57,8 @@ export function TitleScreen({ best, onStart }: { best: Best | null; onStart: () 
 
       <View style={[styles.panel, { paddingBottom: insets.bottom + 18 }]}>
         <Text style={styles.lede}>
-          Pack your own gear, then climb from Paradise to Columbia Crest and back. Weather, cold, thin air, crevasses and
-          the clock all get a say.
+          Pick a route and a partner, pack your own gear, then climb to Columbia Crest and back. Weather, cold, thin air,
+          crevasses and the clock all get a say.
         </Text>
         {best ? (
           <Text style={[styles.best, NUM]}>
@@ -56,8 +72,20 @@ export function TitleScreen({ best, onStart }: { best: Best | null; onStart: () 
           onPress={onStart}
           accessibilityRole="button"
         >
-          <Text style={styles.startText}>Pack your gear</Text>
+          <Text style={styles.startText}>Plan a climb</Text>
         </Pressable>
+        <View style={styles.row}>
+          <Pressable style={styles.secondary} onPress={onDaily} accessibilityRole="button">
+            <Text style={styles.secondaryText}>Daily Climb</Text>
+            <Text style={styles.secondarySub}>
+              {SEASONS[daily.season].label} · with {PARTNERS[daily.partner].name}{dailyScore !== undefined ? ` · ${dailyScore}` : ''}
+            </Text>
+          </Pressable>
+          <Pressable style={styles.secondary} onPress={onLogbook} accessibilityRole="button">
+            <Text style={styles.secondaryText}>Logbook</Text>
+            <Text style={styles.secondarySub}>Skills, badges, photos</Text>
+          </Pressable>
+        </View>
         <Text style={styles.credits}>
           Terrain: USGS 3DEP elevation via AWS Terrain Tiles. Sound effects synthesized for this game; rope-team calls
           use your phone's built-in voice.
@@ -85,4 +113,8 @@ const styles = StyleSheet.create({
   start: { backgroundColor: C.accent, borderRadius: 12, paddingVertical: 16, alignItems: 'center' },
   startText: { color: '#1a0b03', fontSize: 17, fontWeight: '800' },
   credits: { color: C.faint, fontSize: 10, lineHeight: 14 },
+  row: { flexDirection: 'row', gap: 8 },
+  secondary: { flex: 1, borderWidth: 1, borderColor: C.line, borderRadius: 12, paddingVertical: 10, alignItems: 'center' },
+  secondaryText: { color: C.ice, fontSize: 15, fontWeight: '700' },
+  secondarySub: { color: C.faint, fontSize: 11, marginTop: 1 },
 });

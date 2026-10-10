@@ -1,10 +1,10 @@
 # Summit Rainier
 
 A 3D mountaineering survival game for phones (Expo / React Native, TypeScript).
-The player packs real climbing gear, then climbs Mount Rainier's Disappointment
-Cleaver route from Paradise (5,400 ft) to Columbia Crest (14,411 ft) and back,
-managing stamina, warmth, water, food, altitude sickness, morale, weather,
-and time.
+The player plans a climb (route, season, partner, mode, seed), packs real climbing gear, then
+climbs Mount Rainier to Columbia Crest (14,411 ft) and back by the Disappointment Cleaver,
+Emmons-Winthrop, Kautz Glacier or Liberty Ridge, managing stamina, warmth, hands and feet, water,
+food, altitude sickness, morale, weather and time.
 
 See AGENTS.md for Expo rules (use `npx expo install`, check versioned docs).
 
@@ -106,6 +106,36 @@ See AGENTS.md for Expo rules (use `npx expo install`, check versioned docs).
     straw meadows in Sept, trees stand above spring snow), daylight and other teams follow the season.
     The core terrain is no longer drawn inside the detail patch (it poked through and hid the climber at
     Ingraham Flats); the follow camera keeps a clear line of sight and never tilts the climber off screen.
+- Phase 4a replayability:
+  - Routes (`src/game/routes.ts`, `GameState.route`, `routeOf(s)` / `profileOf(s)` / `summitOf(s)` in helpers):
+    DC, Emmons-Winthrop (White River, Camp Schurman), Kautz (Camp Hazard, the ice chute), Liberty Ridge
+    (bivouac on the Carbon Glacier, Thumb Rock, Liberty Cap; reversed on the way down, a simplification).
+    Each has nodes, legs with `corridor` and `hazards` (events read hazards, not leg numbers), `camp`,
+    `bivouacs`, `crater`, default turnaround, extra gear, other teams, unlock rule.
+    `tools/route/waypoints.ts` snaps approximate lat/lon to published elevations on the DEM
+    (`src/scene/data/routeWaypoints.ts`); `tools/route/profile.ts` writes `PROFILES` for all routes.
+    The scene builds the shown route with `setSceneRoute` (terrain `ROUTE` is a mutable holder).
+    New events: steep ice up/down (`ice` hazard: two tools + screws, or risk a slip via `Outcome.next`),
+    icefall (`icefall` ending). New gear: technical ice tool.
+  - Seeds: `GameState.seed` / `rngState`; the engine's default dice (`stateRng`) come from the state, so a seed
+    replays the same forecast and dice for the same choices. Daily Climb = `dailyClimb()` (date seed, season
+    and partner; DC). Seed shown in field notes and the debrief; "Replay seed".
+  - Partners (`src/game/partners.ts`): Ash the cautious veteran, Jordan the strong reckless friend (no helmet
+    or mitts), Riley the nervous first-timer (slower, catches falls less well), and the guide. Own gear
+    (Z-pulley needs the partner's rescue kit; rockfall can hit a helmetless partner), AMS susceptibility,
+    catch odds, rigging speed, pace. Lines at stops (speech bubble) and events: veteran calls the turnaround,
+    friend's summit fever, first-timer freezes, guide calls it.
+  - Profile (`src/game/profile.ts`, saved by `src/ui/storage.ts`): logbook entries with summit photo
+    (scene `shot` ref: GL snapshot copied to documents by `src/ui/photo.ts`; data URL on web), skill XP and
+    levels 0-5 (navigation, self-arrest, acclimatization; small bonuses in events and susceptibility),
+    19 badges, Daily Climb scores, hardcore streak. Unlocks: Emmons after a DC summit, Kautz after Emmons,
+    Liberty after Kautz with self-arrest level 2.
+  - Modes: guided (guide partner, rents missing climbing gear, "Your guide's call" on event choices via
+    `recommendChoice`, turns the team around; score x0.6), hardcore (no dice option in skills, streak resets
+    on a bad ending; score x1.5).
+  - Screens: Title (Plan a climb, Daily Climb, Logbook), `PlanScreen` (route, season, mode, partner, seed),
+    `PackScreen` (shows the plan; guide's list per season and route), `LogbookScreen`, debrief with photo,
+    new badges and level-ups.
 - `src/ui/theme.ts`: palette, `climberLook(state)`, `partnerLook(state)`, `statColor`.
 - `src/ui/PackScreen.tsx`: gear packing screen with weights and a "guide's list" button.
 
@@ -138,7 +168,11 @@ See AGENTS.md for Expo rules (use `npx expo install`, check versioned docs).
   earlier alpine start); pusher 33-43% summit; careless 0-24% summit, 54-72% bad endings, frostnip
   feet 42-97%; budget (hiking boots, alu crampons, no mitts) July 56% summit with 25% frostnip toes,
   May/Sept 0% (slow, cold feet, turnaround). Cautious ~97% retreat. `npm run sim -- --season may`.
-- Phase 4 Replayability (seeds + daily climb, career mode, routes, skills, partners, badges, modes).
+- Phase 4a Replayability on Rainier: DONE (routes, seeds + Daily Climb, partners, skills, badges, logbook with
+  summit photo, guided and hardcore). Sim numbers in the commit message / latest report. `--route all`,
+  `--partner veteran|friend|firstTimer`.
+- Phase 4b Career mode (planned): training hikes (Mt. Si, Camp Muir day hike), snow school (unlocks
+  self-arrest), Mount St. Helens, Adams, Baker (each needs its own terrain data), money, shop, gear wear.
 
 ## Still to do
 1. Test on a real phone with Expo Go (`npx expo start`) and tune touch/camera feel.

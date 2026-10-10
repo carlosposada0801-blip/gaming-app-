@@ -1,18 +1,18 @@
-import { GEAR_BY_ID, packWeightLb } from './gear';
-import {
-  ALPINE_START, DAY, LEGS, MUIR, NODES, START_CLOCK, SUMMIT, formatClock, formatFt, isNight, minuteOfDay,
-} from './route';
+import { GEAR_BY_ID, packWeightLb, toggleGear } from './gear';
+import { DAY, START_CLOCK, formatClock, formatFt, isNight, minuteOfDay } from './route';
+import { ROUTES, type RouteId } from './routes';
 import type {
-  ArrivalContext, Forecast, GameState, HandWear, LayerLevel, Outcome, Pace, Rng, SkillId, Stats, Weather,
+  ArrivalContext, Forecast, GameState, HandWear, LayerLevel, Mode, Outcome, Pace, Rng, SkillId, SkillLevels, Stats, Weather,
 } from './types';
+import { PARTNERS, partnerLine, type PartnerId } from './partners';
 import { SEASONS, type Season } from './season';
 import { EVENTS, EVENT_BY_ID } from './events';
-import { NODE_DIST, PROFILE_DIST, PROFILE_ELEV } from './data/routeProfile';
+import { ENDINGS } from './endings';
 
 // ---------- helpers ----------
 
-import { crampons, has, roped } from './helpers';
-export { crampons, has, roped };
+import { crampons, has, profileOf, roped, routeOf, summitOf } from './helpers';
+export { crampons, has, profileOf, roped, routeOf, summitOf };
 
 const clamp = (n: number, lo = 0, hi = 100) => Math.max(lo, Math.min(hi, n));
 
@@ -20,37 +20,77 @@ export function clone(s: GameState): GameState {
   return JSON.parse(JSON.stringify(s));
 }
 
+// ---------- seeds ----------
+
+/** The climb's own dice: a mulberry32 generator whose state lives in the game state. */
+export function stateRng(s: GameState): Rng {
+  return () => {
+    s.rngState = (s.rngState + 0x6d2b79f5) >>> 0;
+    let t = s.rngState;
+    t = Math.imul(t ^ (t >>> 15), t | 1);
+    t ^= t + Math.imul(t ^ (t >>> 7), t | 61);
+    return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
+  };
+}
+
+/** A seed string to a 32-bit number (FNV-1a). Case and spaces don't matter. */
+export function hashSeed(seed: string) {
+  let h = 0x811c9dc5;
+  for (const ch of seed.trim().toUpperCase()) {
+    h ^= ch.charCodeAt(0);
+    h = Math.imul(h, 0x01000193) >>> 0;
+  }
+  return h >>> 0;
+}
+
+const SEED_CHARS = 'ABCDEFGHJKLMNPQRSTUVWXYZ23456789';
+export function randomSeed(rng: Rng = Math.random) {
+  let out = '';
+  for (let i = 0; i < 6; i++) out += SEED_CHARS[Math.floor(rng() * SEED_CHARS.length)];
+  return out;
+}
+
+/** Today's Daily Climb: everyone gets the same seed, season and partner (local date). */
+export function dailyClimb(date = new Date()) {
+  const day = `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, '0')}-${String(date.getDate()).padStart(2, '0')}`;
+  const h = hashSeed(`DAILY-${day}`);
+  const seasons: Season[] = ['may', 'july', 'september'];
+  const partners: PartnerId[] = ['veteran', 'friend', 'firstTimer'];
+  return { day, seed: `DAILY-${day}`, season: seasons[h % 3], partner: partners[(h >>> 4) % 3], route: 'dc' as RouteId };
+}
+
 export function log(s: GameState, text: string, tone?: 'good' | 'bad' | 'info') {
   s.log.unshift({ clock: s.clock, text, tone });
   if (s.log.length > 60) s.log.length = 60;
 }
 
-/** Elevation (m) at a distance along the route, from the real terrain profile. */
-export function elevAt(d: number) {
+/** Elevation (m) at a distance along this climb's route, from the real terrain profile. */
+export function elevAt(s: GameState, d = s.dist) {
+  const { dist, elev } = profileOf(s);
   let lo = 0;
-  let hi = PROFILE_DIST.length - 1;
-  if (d <= 0) return PROFILE_ELEV[0];
-  if (d >= PROFILE_DIST[hi]) return PROFILE_ELEV[hi];
+  let hi = dist.length - 1;
+  if (d <= 0) return elev[0];
+  if (d >= dist[hi]) return elev[hi];
   while (hi - lo > 1) {
     const mid = (lo + hi) >> 1;
-    if (PROFILE_DIST[mid] <= d) lo = mid;
+    if (dist[mid] <= d) lo = mid;
     else hi = mid;
   }
-  const t = (d - PROFILE_DIST[lo]) / (PROFILE_DIST[hi] - PROFILE_DIST[lo] || 1);
-  return PROFILE_ELEV[lo] + (PROFILE_ELEV[hi] - PROFILE_ELEV[lo]) * t;
+  const t = (d - dist[lo]) / (dist[hi] - dist[lo] || 1);
+  return elev[lo] + (elev[hi] - elev[lo]) * t;
 }
 
 const M_TO_FT = 3.28084;
 
 /** True when standing at a stop (not partway along a leg). */
 export function atStop(s: GameState) {
-  return Math.abs(s.dist - NODE_DIST[s.node]) < 1;
+  return Math.abs(s.dist - profileOf(s).nodeDist[s.node]) < 1;
 }
 
 /** Where the party stands, in feet. At a stop this is the stop's published elevation. */
 export function currentFt(s: GameState) {
-  if (Math.abs(s.dist - NODE_DIST[s.node]) < 1) return NODES[s.node].ft;
-  return elevAt(s.dist) * M_TO_FT;
+  if (atStop(s)) return routeOf(s).nodes[s.node].ft;
+  return elevAt(s) * M_TO_FT;
 }
 
 export const WEATHER_LABEL: Record<Weather, string> = {
@@ -295,13 +335,58 @@ export function updateWeather(s: GameState, rng: Rng) {
 
 // ---------- new game ----------
 
-export function newGame(packed: string[], rng: Rng = Math.random, season: Season = 'july'): GameState {
+export interface NewGameOptions {
+  /** Dice for setting up the climb (the simulation passes its own); otherwise from the seed. */
+  rng?: Rng;
+  season?: Season;
+  route?: RouteId;
+  seed?: string;
+  partner?: PartnerId;
+  mode?: Mode;
+  skills?: SkillLevels;
+}
+
+/** Gear a guide service rents you if you show up without it. */
+const RENTALS = ['boots_single', 'crampons_steel', 'helmet', 'harness', 'axe', 'headlamp'];
+
+export function newGame(packedIn: string[], opts: NewGameOptions = {}): GameState {
+  const season = opts.season ?? 'july';
+  const route = opts.route ?? 'dc';
+  const mode = opts.mode ?? 'standard';
+  const partnerId: PartnerId = mode === 'guided' ? 'guide' : opts.partner ?? 'veteran';
+  const partner = PARTNERS[partnerId];
+  const skills = opts.skills ?? { nav: 0, arrest: 0, acclim: 0 };
+  const seed = opts.seed?.trim().toUpperCase() || randomSeed();
+  const rngState = hashSeed(seed);
+  const holder = { rngState } as GameState;
+  const rng = opts.rng ?? stateRng(holder);
+
+  let packed = [...packedIn];
+  const rented: string[] = [];
+  if (mode === 'guided') {
+    for (const id of RENTALS) {
+      if (packed.includes(id)) continue;
+      // Guide services want stiff boots and steel crampons: they swap out the wrong kind.
+      if (id === 'boots_single' && packed.includes('boots_double')) continue;
+      packed = toggleGear(packed, id);
+      rented.push(GEAR_BY_ID[id].name.toLowerCase());
+    }
+  }
+
   const f = rng();
   const [stable, unsettled] = SEASONS[season].forecast;
   const forecast: Forecast = f < stable ? 'stable' : f < unsettled ? 'unsettled' : 'incoming';
   const s: GameState = {
     season,
-    packed: [...packed],
+    route,
+    partner: partnerId,
+    mode,
+    skills,
+    seed,
+    rngState: holder.rngState,
+    skillLog: [],
+    partnerSays: null,
+    packed,
     stats: { stamina: 100, warmth: 90, hydration: 85, energy: 85, ams: 0, morale: 75 },
     node: 0,
     dir: 'up',
@@ -314,14 +399,17 @@ export function newGame(packed: string[], rng: Rng = Math.random, season: Season
     footTemp: 100,
     wet: 0,
     water: packed.includes('water') ? 3 : 0,
-    food: packed.includes('food') ? 6 : 0,
+    // Summit food is about two days' worth; you pack more for each extra night out.
+    food: packed.includes('food') ? 6 + 3 * ROUTES[route].bivouacs.length : 0,
     slept: false,
+    bivied: [],
     campLeft: false,
-    turnaround: DAY + 600, // 10:00 AM on summit day
-    alpineStart: SEASONS[season].alpineStart,
-    susceptibility: 0.7 + rng() * 0.7,
+    turnaround: ROUTES[route].turnaround, // 10:00 AM on summit day on the Cleaver
+    alpineStart: SEASONS[season].alpineStart + DAY * ROUTES[route].bivouacs.length,
+    // Acclimatization from past climbs takes the edge off (a game stand-in for experience).
+    susceptibility: (0.7 + rng() * 0.7) * (1 - 0.06 * skills.acclim),
     partnerAms: 0,
-    partnerSusceptibility: 0.7 + rng() * 0.8,
+    partnerSusceptibility: partner.susceptibility[0] + rng() * (partner.susceptibility[1] - partner.susceptibility[0]),
     summited: false,
     flags: {},
     usedEvents: [],
@@ -332,12 +420,14 @@ export function newGame(packed: string[], rng: Rng = Math.random, season: Season
     moveId: 0,
     restsHere: 0,
     prevNode: 0,
-    dist: NODE_DIST[0],
+    dist: 0,
     lateral: 0,
     legStart: START_CLOCK,
     legOffTrack: 0,
   };
-  log(s, `Paradise in ${SEASONS[season].label}, ${formatClock(s.clock)}. Pack weight ${packWeightLb(packed)} lb.`, 'info');
+  if (!opts.rng) s.rngState = holder.rngState;
+  log(s, `${ROUTES[route].nodes[0].name} in ${SEASONS[season].label}, ${formatClock(s.clock)}. ${ROUTES[route].name} with ${partner.name}. Seed ${seed}. Pack weight ${packWeightLb(packed)} lb.`, 'info');
+  if (rented.length) log(s, `Your guide checks your pack and rents you: ${rented.join(', ')}.`, 'info');
   return s;
 }
 
@@ -353,28 +443,38 @@ export function legIndex(s: GameState) {
   return s.dir === 'up' ? s.node : s.node - 1;
 }
 
+/** Crampons are needed above high camp, and on any glacier or ice below it. */
+export function needsCrampons(s: GameState, i: number) {
+  const R = routeOf(s);
+  const leg = R.legs[i];
+  return !!leg && (i >= R.camp || leg.terrain === 'glacier' || leg.terrain === 'ice');
+}
+
 export function legMinutes(s: GameState, pace: Pace, i = legIndex(s)) {
-  const leg = LEGS[i];
+  const R = routeOf(s);
+  const leg = R.legs[i];
   if (!leg) return 0;
   let t = leg.minutes * PACE_TIME[pace];
   if (s.dir === 'down') t *= 0.5;
-  if (i >= 2 && !crampons(s)) t *= 1.5;
-  if (i >= 1 && has(s, 'boots_hiking')) t *= 1.1;
+  if (needsCrampons(s, i) && !crampons(s)) t *= 1.5;
+  if (leg.terrain !== 'trail' && has(s, 'boots_hiking')) t *= 1.1;
   if (s.stats.stamina < 25) t *= 1.25;
   if (s.flags.snowBlind) t *= 1.2;
   if (s.flags.ankle) t *= 1.4;
+  // The party moves at the slower climber's pace.
+  t *= PARTNERS[s.partner].pace;
   if (s.flags.frostbiteFeet) t *= 1.3;
   else if (s.flags.frostnipFeet) t *= 1.15;
-  // Spring: deep soft snow below Muir. Without snowshoes you sink in to your shins or knees.
-  if (i <= 1 && SEASONS[s.season].softSnow && !has(s, 'snowshoes')) t *= 1.2;
-  if (i >= 2 && i <= 5) t *= SEASONS[s.season].upperTime;
+  // Spring: deep soft snow below high camp. Without snowshoes you sink in to your shins or knees.
+  if (i < R.camp && SEASONS[s.season].softSnow && !has(s, 'snowshoes')) t *= 1.2;
+  if (i >= R.camp && i < R.legs.length - 1) t *= SEASONS[s.season].upperTime;
   t *= WEATHER_TIME[s.weather];
   return Math.round(t);
 }
 
 export function canMove(s: GameState): { ok: boolean; reason?: string } {
   if (s.ending || s.pendingEvent) return { ok: false };
-  if (s.dir === 'up' && s.node >= SUMMIT) return { ok: false, reason: 'You’re on top. Time to go down.' };
+  if (s.dir === 'up' && s.node >= summitOf(s)) return { ok: false, reason: 'You’re on top. Time to go down.' };
   if (isNight(s.clock, s.season) && !has(s, 'headlamp')) {
     return { ok: false, reason: 'Too dark to move without a headlamp. Wait for first light.' };
   }
@@ -382,18 +482,20 @@ export function canMove(s: GameState): { ok: boolean; reason?: string } {
 }
 
 function travel(s: GameState, pace: Pace, rng: Rng) {
+  const R = routeOf(s);
+  const { nodes, camp } = R;
+  const summit = nodes.length - 1;
   const i = legIndex(s);
-  const leg = LEGS[i];
   const from = s.node;
   const to = s.dir === 'up' ? from + 1 : from - 1;
   const minutes = legMinutes(s, pace);
   const hours = minutes / 60;
   const start = s.clock;
 
-  if (s.dir === 'up' && from === MUIR) s.campLeft = true; // sleeping bag, pad, stove stay at Muir
+  if (s.dir === 'up' && from === camp) s.campLeft = true; // sleeping bag, pad, stove stay at camp
 
-  const gain = Math.max(0, NODES[to].ft - NODES[from].ft);
-  const loss = Math.max(0, NODES[from].ft - NODES[to].ft);
+  const gain = Math.max(0, nodes[to].ft - nodes[from].ft);
+  const loss = Math.max(0, nodes[from].ft - nodes[to].ft);
   const lb = packWeightLb(s.packed, s.campLeft);
   const weightFactor = 1 + Math.max(0, lb - 30) * 0.015;
 
@@ -402,10 +504,10 @@ function travel(s: GameState, pace: Pace, rng: Rng) {
   if (s.stats.energy < 25) cost *= 1.4;
   if (s.stats.hydration < 25) cost *= 1.3;
   if (s.stats.ams > 70) cost *= 1.3;
-  if (i <= 1 && !has(s, 'poles')) cost *= 1.08;
-  if (i >= 1 && has(s, 'boots_hiking')) cost *= 1.12;
+  if (i < camp && !has(s, 'poles')) cost *= 1.08;
+  if (R.legs[i].terrain !== 'trail' && has(s, 'boots_hiking')) cost *= 1.12;
   if (s.weather === 'storm' || s.weather === 'whiteout') cost *= 1.2;
-  if (i <= 1 && SEASONS[s.season].softSnow && !has(s, 'snowshoes')) cost *= 1.2;
+  if (i < camp && SEASONS[s.season].softSnow && !has(s, 'snowshoes')) cost *= 1.2;
   s.stats.stamina -= cost;
 
   const sunny = s.weather === 'clear' && !isNight(s.clock, s.season);
@@ -414,10 +516,10 @@ function travel(s: GameState, pace: Pace, rng: Rng) {
   if (s.stats.energy <= 0) { s.stats.stamina -= 8; s.stats.morale -= 8; }
   if (s.stats.hydration <= 0) { s.stats.stamina -= 8; s.stats.ams += 8; }
 
-  thermal(s, hours, true, (NODES[from].ft + NODES[to].ft) / 2, pace);
+  thermal(s, hours, true, (nodes[from].ft + nodes[to].ft) / 2, pace);
 
   if (s.dir === 'up') {
-    const above = Math.max(0, NODES[to].ft - Math.max(NODES[from].ft, 8000));
+    const above = Math.max(0, nodes[to].ft - Math.max(nodes[from].ft, 8000));
     const dry = s.stats.hydration < 35 ? 1.4 : 1;
     s.stats.ams += (above / 1000) * 5.5 * PACE_AMS[pace] * s.susceptibility * dry;
     s.partnerAms += (above / 1000) * 5.5 * PACE_AMS[pace] * s.partnerSusceptibility;
@@ -434,23 +536,23 @@ function travel(s: GameState, pace: Pace, rng: Rng) {
   s.clock += minutes;
   s.prevNode = from;
   s.node = to;
-  s.dist = NODE_DIST[to];
+  s.dist = profileOf(s).nodeDist[to];
   s.lateral = 0;
   s.legStart = s.clock;
   s.legOffTrack = 0;
   s.moveId += 1;
   s.restsHere = 0;
 
-  if (s.dir === 'up' && i === 1 && has(s, 'wands')) {
+  if (s.dir === 'up' && R.legs[i].hazards.whiteout && has(s, 'wands') && !s.flags.wandsPlaced) {
     s.flags.wandsPlaced = true;
     log(s, 'You placed wands every rope length across the snowfield.', 'info');
   }
-  if (s.dir === 'down' && to === MUIR) s.campLeft = false; // back with your camp gear
+  if (s.dir === 'down' && to === camp) s.campLeft = false; // back with your camp gear
 
   const verb = s.dir === 'up' ? 'Reached' : 'Down to';
-  log(s, `${verb} ${NODES[to].name} (${formatFt(NODES[to].ft)}) after ${fmtDuration(minutes)}.`);
+  log(s, `${verb} ${nodes[to].name} (${formatFt(nodes[to].ft)}) after ${fmtDuration(minutes)}.`);
 
-  if (s.dir === 'up' && to === SUMMIT) s.summited = true;
+  if (s.dir === 'up' && to === summit) s.summited = true;
   if (s.dir === 'up' && s.clock > s.turnaround && s.clock > DAY && !s.flags.pushedPastTurnaround) {
     s.flags.pushedPastTurnaround = true;
     log(s, `Past your ${formatClock(s.turnaround)} turnaround time. Snow bridges soften and rockfall picks up as the day warms.`, 'bad');
@@ -467,7 +569,7 @@ function travel(s: GameState, pace: Pace, rng: Rng) {
 
   if (s.dir === 'down' && s.node === 0) {
     s.ending = s.summited ? 'summit' : 'retreat';
-    log(s, 'Back at the Paradise parking lot.', 'good');
+    log(s, `Back at the ${nodes[0].name} trailhead.`, 'good');
     return;
   }
 
@@ -521,30 +623,36 @@ export interface Action {
 }
 
 export function listActions(s: GameState): Action[] {
+  const R = routeOf(s);
+  const { nodes, camp } = R;
+  const summit = nodes.length - 1;
   if (s.ending || s.pendingEvent) return [];
   const out: Action[] = [];
   const move = canMove(s);
-  const atTop = s.node === SUMMIT;
+  const atTop = s.node === summit;
 
   if (s.dir === 'up' && !atTop) {
-    const next = NODES[s.node + 1];
+    const next = nodes[s.node + 1];
     out.push({ id: 'go:steady', label: `Climb to ${next.name}`, detail: `Steady pace · ${fmtDuration(legMinutes(s, 'steady'))}`, disabled: !move.ok, primary: true });
     out.push({ id: 'go:rest', label: 'Rest-step pace', detail: `Slower, easier on lungs · ${fmtDuration(legMinutes(s, 'rest'))}`, disabled: !move.ok });
     out.push({ id: 'go:push', label: 'Push hard', detail: `Faster, harder · ${fmtDuration(legMinutes(s, 'push'))}`, disabled: !move.ok });
   } else {
-    const next = NODES[s.node - 1];
+    const next = nodes[s.node - 1];
     out.push({ id: 'go:steady', label: `Descend to ${next.name}`, detail: fmtDuration(legMinutes(s, 'steady')), disabled: !move.ok, primary: true });
     out.push({ id: 'go:rest', label: 'Descend carefully', detail: `Slower, safer footing · ${fmtDuration(legMinutes(s, 'rest'))}`, disabled: !move.ok });
   }
 
-  if (s.node === MUIR && s.dir === 'up' && !s.slept && atStop(s)) {
+  if (R.bivouacs.includes(s.node) && s.dir === 'up' && !s.bivied.includes(s.node) && atStop(s)) {
+    out.push({ id: 'bivy', label: 'Camp here for the night', detail: `Up at first light (${formatClock(SEASONS[s.season].dawn)})`, primary: true });
+  }
+  if (s.node === camp && s.dir === 'up' && !s.slept && atStop(s)) {
     out.push({ id: 'sleep', label: 'Sleep until alpine start', detail: `Wake at ${formatClock(s.alpineStart)}`, primary: true });
     out.push({ id: 'alpine', label: `Alpine start: ${formatClock(s.alpineStart)}`, detail: 'Earlier is colder and darker, but leaves time to spare. Tap to change' });
   }
-  if (s.node === MUIR && s.dir === 'up' && atStop(s)) {
+  if (s.node === camp && s.dir === 'up' && atStop(s)) {
     out.push({ id: 'turnaround', label: `Turnaround time: ${formatClock(s.turnaround)}`, detail: 'Tap to change' });
   }
-  if (s.node === MUIR && has(s, 'stove') && atStop(s)) {
+  if ((s.node === camp || (R.bivouacs.includes(s.node) && s.dir === 'up')) && has(s, 'stove') && atStop(s)) {
     out.push({ id: 'melt', label: 'Melt snow for water', detail: '45 min · refill to 3 L', disabled: s.water >= 3 });
   }
   out.push({ id: 'drink', label: 'Drink', detail: s.water > 0 ? `${s.water.toFixed(1)} L left` : 'No water', disabled: s.water < 0.5 });
@@ -577,8 +685,12 @@ export function moveBlockedReason(s: GameState) {
   return canMove(s).reason;
 }
 
-export function doAction(prev: GameState, id: string, rng: Rng = Math.random): GameState {
+export function doAction(prev: GameState, id: string, rngIn?: Rng): GameState {
+  const R = routeOf(prev);
+  const { nodes, camp } = R;
+  const summit = nodes.length - 1;
   const s = clone(prev);
+  const rng = rngIn ?? stateRng(s);
   s.lastOutcome = null;
   const ft = currentFt(s);
   const idle = (min: number) => {
@@ -590,7 +702,7 @@ export function doAction(prev: GameState, id: string, rng: Rng = Math.random): G
 
   if (id.startsWith('go:')) {
     if (!canMove(s).ok) return prev;
-    if (s.node === SUMMIT) s.dir = 'down';
+    if (s.node === summit) s.dir = 'down';
     travel(s, id.slice(3) as Pace, rng);
   } else if (id === 'drink' && s.water >= 0.5) {
     s.water = Math.round((s.water - 0.5) * 10) / 10;
@@ -618,19 +730,21 @@ export function doAction(prev: GameState, id: string, rng: Rng = Math.random): G
     s.footTemp = Math.min(100, s.footTemp + 6);
     idle(20);
     log(s, gain > 4 ? 'Took a 20-minute break.' : 'Another break. Your legs stiffen as you sit in the cold.');
-  } else if (id === 'melt' && has(s, 'stove') && s.node === MUIR && atStop(s)) {
+  } else if (id === 'melt' && has(s, 'stove') && (s.node === camp || R.bivouacs.includes(s.node)) && atStop(s)) {
     s.water = 3;
     s.stats.morale += 3;
     idle(45);
     log(s, 'Melted snow and refilled to 3 liters.', 'good');
-  } else if (id === 'sleep' && s.node === MUIR && !s.slept && atStop(s)) {
-    sleepAtMuir(s, rng);
+  } else if (id === 'sleep' && s.node === camp && !s.slept && atStop(s)) {
+    sleepAtCamp(s, rng);
   } else if (id === 'turnaround') {
-    const options = [DAY + 540, DAY + 600, DAY + 660];
+    const options = [R.turnaround - 60, R.turnaround, R.turnaround + 60];
     const idx = options.indexOf(s.turnaround);
     s.turnaround = options[(idx + 1) % options.length];
+  } else if (id === 'bivy' && R.bivouacs.includes(s.node) && !s.bivied.includes(s.node) && atStop(s)) {
+    bivouac(s);
   } else if (id === 'alpine' && !s.slept) {
-    const def = SEASONS[s.season].alpineStart;
+    const def = defaultAlpineStart(s);
     const options = [def - 60, def, def + 60];
     const idx = options.indexOf(s.alpineStart);
     s.alpineStart = options[(idx + 1) % options.length];
@@ -639,7 +753,7 @@ export function doAction(prev: GameState, id: string, rng: Rng = Math.random): G
     if (s.weather === 'storm' || s.weather === 'whiteout' || s.stats.ams > 60 || s.clock > s.turnaround) {
       s.flags.goodCall = true;
     }
-    log(s, `Turned back at ${NODES[s.node].name}.`, 'info');
+    log(s, `Turned back at ${nodes[s.node].name}.`, 'info');
   } else if (id === 'wait') {
     const m = minuteOfDay(s.clock);
     const dawn = SEASONS[s.season].dawn;
@@ -653,7 +767,33 @@ export function doAction(prev: GameState, id: string, rng: Rng = Math.random): G
   return s;
 }
 
-function sleepAtMuir(s: GameState, rng: Rng) {
+/** The usual time to leave high camp: the season's alpine start, on the last day of the approach. */
+export function defaultAlpineStart(s: GameState) {
+  return SEASONS[s.season].alpineStart + DAY * routeOf(s).bivouacs.length;
+}
+
+/** A night out on the approach: up at first light. */
+function bivouac(s: GameState) {
+  const bag = has(s, 'bag');
+  const pad = has(s, 'pad');
+  const dawn = SEASONS[s.season].dawn;
+  const m = minuteOfDay(s.clock);
+  const wake = s.clock + (m < dawn ? dawn - m : DAY - m + dawn);
+  s.clock = wake;
+  s.bivied.push(s.node);
+  s.stats.stamina += 20 + (bag ? 25 : 0) + (pad ? 10 : 0);
+  s.stats.warmth = bag ? 90 : pad ? 55 : 45;
+  s.stats.hydration -= 6;
+  s.stats.energy -= 8;
+  s.handTemp = bag ? 100 : 70;
+  s.footTemp = bag ? 100 : 65;
+  s.wet *= bag ? 0.3 : 0.8;
+  s.stats.morale += bag ? 4 : -10;
+  log(s, bag ? `A night on the glacier in your bag. Up at ${formatClock(wake)}.` : `A long, cold night without a sleeping bag. Up at ${formatClock(wake)}.`, bag ? 'good' : 'bad');
+  clampStats(s);
+}
+
+function sleepAtCamp(s: GameState, rng: Rng) {
   const bag = has(s, 'bag');
   const pad = has(s, 'pad');
   const wake = Math.max(s.alpineStart, s.clock + 120);
@@ -681,8 +821,8 @@ function sleepAtMuir(s: GameState, rng: Rng) {
   log(
     s,
     bag
-      ? `Slept a few hours in the shelter. Alarm at ${formatClock(wake)}.`
-      : `A miserable night shivering on the shelter floor. Up at ${formatClock(wake)}.`,
+      ? `Slept a few hours ${s.route === 'dc' ? 'in the shelter' : 'in the tent'}. Alarm at ${formatClock(wake)}.`
+      : `A miserable night shivering ${s.route === 'dc' ? 'on the shelter floor' : 'in the tent'}. Up at ${formatClock(wake)}.`,
     bag ? 'good' : 'bad',
   );
   clampStats(s);
@@ -695,21 +835,23 @@ export function eventChoices(s: GameState) {
   return EVENT_BY_ID[s.pendingEvent].choices(s);
 }
 
-export function chooseEvent(prev: GameState, index: number, rng: Rng = Math.random, perf?: number): GameState {
+export function chooseEvent(prev: GameState, index: number, rngIn?: Rng, perf?: number): GameState {
   if (!prev.pendingEvent) return prev;
   const s = clone(prev);
+  const rng = rngIn ?? stateRng(s);
   const def = EVENT_BY_ID[prev.pendingEvent];
   const choice = def.choices(s)[index];
   if (!choice || choice.disabled) return prev;
   const p = perf === undefined || !choice.skill ? perf : perf * skillHandicap(s, choice.skill);
   const outcome: Outcome = choice.resolve(s, rng, p === undefined ? undefined : Math.max(0, Math.min(1, p)));
+  if (choice.skill && p !== undefined) s.skillLog.push({ skill: choice.skill, perf: Math.max(0, Math.min(1, p)) });
   // Rope work in the snow chills your hands, less so in mittens.
   if (choice.skill === 'prusik' || choice.skill === 'zpulley') {
     s.handTemp -= handOuter(s) === 'mitts' ? 4 : handOuter(s) === 'gloves' ? 10 : 18;
   }
   applyOutcome(s, outcome);
   s.usedEvents.push(def.id);
-  s.pendingEvent = null;
+  s.pendingEvent = outcome.next && !s.ending ? outcome.next : null;
   return s;
 }
 
@@ -734,3 +876,34 @@ function applyOutcome(s: GameState, o: Outcome) {
 }
 
 export { packWeightLb };
+
+// ---------- the guide's pick ----------
+
+/**
+ * Which event choice a careful guide would take: each option is played out a few times with the
+ * climb's dice, and the one that leaves the party best off (alive, warm, rested, on schedule) wins.
+ * Turning around only wins when going on looks clearly worse.
+ */
+export function recommendChoice(s: GameState): number {
+  const choices = eventChoices(s);
+  const open = choices.map((c, i) => (c.disabled ? -1 : i)).filter((i) => i >= 0);
+  let best = open[0] ?? 0;
+  let bestValue = -Infinity;
+  for (const i of open) {
+    let total = 0;
+    for (let k = 0; k < 8; k++) {
+      const dice = stateRng({ rngState: (s.rngState + k * 7919 + i * 104729) >>> 0 } as GameState);
+      const n = chooseEvent(s, i, dice, choices[i].skill ? 0.7 : undefined);
+      const st = n.stats;
+      let v = st.stamina + st.warmth + st.hydration + st.energy + st.morale - st.ams * 1.5 - (n.clock - s.clock) * 0.15;
+      if (s.dir === 'up' && n.dir === 'down') v -= 60;
+      if (n.ending) v += ENDINGS[n.ending].good ? 300 : -2000;
+      total += v;
+    }
+    if (total > bestValue) {
+      bestValue = total;
+      best = i;
+    }
+  }
+  return best;
+}

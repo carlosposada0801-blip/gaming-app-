@@ -1,15 +1,18 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { Canvas, useFrame, useThree } from '@react-three/fiber/native';
+import { Platform } from 'react-native';
+import { GLView } from 'expo-gl';
 import * as THREE from 'three';
 import { Climber, type ClimberLook, type Motion } from './Climber';
 import { crevasseGeometry, rockGeometry, scatter, seracGeometry, treeGeometry, type Instances } from './features';
 import {
   CORE_MESH, FAR, HORIZON, PATCH_HALF, ROUTE, ROUTE_SPACING, SUMMIT_POS, buildPatch, currentPatch, earthDrop, groundColor,
-  inside, nodePosition, routeIndexAt, sceneSeason, setSceneSeason, slopeAt, snowCover, surfaceAt, type Grid, type Vec3,
+  inside, nodePosition, routeIndexAt, sceneSeason, setSceneRoute, setSceneSeason, slopeAt, snowCover, surfaceAt, type Grid, type Vec3,
 } from './terrain';
 import { cloudTexture, detailTextures, grassTexture } from './textures';
 import { flowerGeometry, grassGeometry, meadowScatter, swaying, tickWind } from './vegetation';
-import { LEGS, MUIR, SUMMIT as SUMMIT_NODE, minuteOfDay } from '../game/route';
+import { minuteOfDay } from '../game/route';
+import { ROUTES, type RouteDef, type RouteId } from '../game/routes';
 import { SEASONS, type Season } from '../game/season';
 import type { Weather } from '../game/types';
 
@@ -38,14 +41,22 @@ export interface SceneProps {
   live?: React.MutableRefObject<LiveMove>;
   /** Freeze rendering (the last frame stays on screen), e.g. while a skill mini-game is open. */
   paused?: boolean;
-  /** Snowline, meadow color, daylight hours and the other parties' start time follow the season. */
+  /** Snowline, meadow color, daylight hours and the other teams' start time follow the season. */
   season?: Season;
+  /** Which route to draw, with its camps and other parties. */
+  route?: RouteId;
+  /** Filled in by the scene: renders a frame and returns it as an image URI (or null). */
+  shot?: React.MutableRefObject<(() => Promise<string | null>) | null>;
 }
 
-/** Daylight and the summit-day start for the season on screen. */
-const sceneDay = { dawn: SEASONS.july.dawn, dusk: SEASONS.july.dusk, alpine: SEASONS.july.alpineStart };
+/** Daylight, the summit-day start and the route on screen. */
+const sceneDay: { dawn: number; dusk: number; alpine: number; route: RouteDef } = {
+  dawn: SEASONS.july.dawn, dusk: SEASONS.july.dusk, alpine: SEASONS.july.alpineStart, route: ROUTES.dc,
+};
 
-function useSceneSeason(season: Season) {
+function useSceneSetup(season: Season, route: RouteId) {
+  setSceneRoute(route);
+  sceneDay.route = ROUTES[route];
   // Runs during render, before the terrain, patch and meadow are built below.
   if (sceneSeason.key !== season) {
     const info = SEASONS[season];
@@ -54,7 +65,7 @@ function useSceneSeason(season: Season) {
   const info = SEASONS[season];
   sceneDay.dawn = info.dawn;
   sceneDay.dusk = info.dusk;
-  sceneDay.alpine = info.alpineStart;
+  sceneDay.alpine = info.alpineStart + 1440 * ROUTES[route].bivouacs.length;
 }
 
 export interface LiveMove {
@@ -390,35 +401,45 @@ function Wand({ p }: { p: Vec3 }) {
 const onGround = (x: number, z: number, dy = 0): Vec3 => [x, surfaceAt(x, z) + dy, z];
 
 function RouteMarkers({ wands, patchId }: { wands: boolean; patchId: number }) {
+  const R = sceneDay.route;
   // Positions depend on the detail patch, so recompute when it changes.
-  const { nodeWands, fieldWands, muir, paradise } = useMemo(() => {
-    const nodeWands = [1, 3, 4, 5, 6].map((i) => {
+  const { nodeWands, fieldWands, camp, paradise } = useMemo(() => {
+    const nodeWands = R.nodes.map((_, i) => i).filter((i) => i > 0 && i < R.nodes.length - 1 && i !== R.camp).map((i) => {
       const [x, , z] = nodePosition(i);
       return onGround(x + 3, z + 2);
     });
+    // Your wands go in on the big snowfield below camp.
     const fieldWands: Vec3[] = [];
-    for (let i = ROUTE.nodeIndex[1] + 6; i < ROUTE.nodeIndex[2]; i += 7) {
-      const [x, , z] = ROUTE.pts[i];
-      fieldWands.push(onGround(x + 1.5, z));
+    const leg = R.legs.findIndex((l) => l.hazards.whiteout);
+    if (leg >= 0) {
+      for (let i = ROUTE.nodeIndex[leg] + 6; i < ROUTE.nodeIndex[leg + 1]; i += 7) {
+        const [x, , z] = ROUTE.pts[i];
+        fieldWands.push(onGround(x + 1.5, z));
+      }
     }
-    return { nodeWands, fieldWands, muir: nodePosition(2), paradise: nodePosition(0) };
+    return { nodeWands, fieldWands, camp: R.camp, paradise: R.nodes[0].name === 'Paradise' ? nodePosition(0) : null };
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [patchId]);
+  }, [patchId, R]);
   return (
     <group>
       {nodeWands.map((p, i) => <Wand key={i} p={p} />)}
       {wands && fieldWands.map((p, i) => <Wand key={`w${i}`} p={p} />)}
-      <CampMuir at={muir} patchId={patchId} />
-      <ParadiseInn at={paradise} />
+      <HighCamp node={camp} patchId={patchId} route={R} />
+      {R.bivouacs.map((b) => <HighCamp key={b} node={b} patchId={patchId} route={R} small />)}
+      {paradise && <ParadiseInn at={paradise} />}
     </group>
   );
 }
 
-/** Camp Muir: the stone public shelter, the guide hut, a toilet, and climbers' tents on the snow. */
-function CampMuir({ at, patchId }: { at: Vec3; patchId: number }) {
+/**
+ * High camp. Camp Muir: the stone public shelter, the guide hut, a toilet, and tents on the snow.
+ * Camp Schurman: the ranger hut and tents. Elsewhere, a few tents (a single one at a bivouac).
+ */
+function HighCamp({ node, patchId, route, small }: { node: number; patchId: number; route: RouteDef; small?: boolean }) {
   const items = useMemo(() => {
+    const at = nodePosition(node);
     // Lay the camp out beside the track: huts on the ridge to one side, tents on the snow to the other.
-    const i0 = ROUTE.nodeIndex[2];
+    const i0 = ROUTE.nodeIndex[node];
     const a = ROUTE.pts[i0 - 2];
     const b = ROUTE.pts[i0 + 2];
     const len = Math.hypot(b[0] - a[0], b[2] - a[2]) || 1;
@@ -426,19 +447,22 @@ function CampMuir({ at, patchId }: { at: Vec3; patchId: number }) {
     const fz = (b[2] - a[2]) / len;
     const side = (along: number, across: number) => onGround(at[0] + fx * along - fz * across, at[2] + fz * along + fx * across);
     const rot = Math.atan2(fx, fz);
-    const huts: { p: Vec3; size: Vec3; rot: number; color: string }[] = [
+    const huts: { p: Vec3; size: Vec3; rot: number; color: string }[] = route.id === 'dc' ? [
       { p: side(-6, -20), size: [11, 3.4, 5.5], rot, color: '#6b645b' },
       { p: side(12, -26), size: [8, 3, 5], rot, color: '#5f5953' },
       { p: side(-22, -16), size: [3, 2.6, 3], rot, color: '#7a6f62' },
-    ];
+    ] : route.id === 'emmons' && !small ? [
+      { p: side(4, -18), size: [4, 2.8, 4], rot, color: '#6b645b' },
+    ] : [];
     const tents: { p: Vec3; rot: number; color: string }[] = [];
-    const colors = ['#e8b923', '#d9472b', '#2f7d4f', '#e8b923', '#c8322b', '#3a6fb0'];
+    const all = ['#e8b923', '#d9472b', '#2f7d4f', '#e8b923', '#c8322b', '#3a6fb0'];
+    const colors = small ? all.slice(0, 1) : route.id === 'dc' ? all : route.id === 'emmons' ? all.slice(0, 4) : all.slice(0, 2);
     for (let i = 0; i < colors.length; i++) {
       tents.push({ p: side(-10 + (i % 3) * 8, 18 + Math.floor(i / 3) * 8), rot: rot + i * 0.7, color: colors[i] });
     }
     return { huts, tents };
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [at, patchId]);
+  }, [node, patchId, route, small]);
   return (
     <group>
       {items.huts.map((h, i) => (
@@ -492,36 +516,27 @@ const TEAM_GAP_M = 9;
 
 /** Where a team is (meters along the route) at a given clock, or null when off the route. */
 function teamDist(clock: number, start: number) {
-  const nodeD = (k: number) => {
-    const i = ROUTE.nodeIndex[k];
-    return ROUTE_CUM_LOCAL[i];
-  };
+  const { camp, legs } = sceneDay.route;
+  const summit = legs.length;
+  const nodeD = (k: number) => ROUTE.cum[ROUTE.nodeIndex[k]];
   let t = clock - (sceneDay.alpine + start);
-  if (t < -40) return null; // still in the hut
-  if (t < 0) return nodeD(MUIR) + 15; // gearing up outside the shelter
+  if (t < -40) return null; // still in the hut or tent
+  if (t < 0) return nodeD(camp) + 15; // gearing up outside
   // Up at standard pace, 20 minutes on top, down at half the time.
-  for (let k = MUIR; k < SUMMIT_NODE; k++) {
-    const m = LEGS[k].minutes;
+  for (let k = camp; k < summit; k++) {
+    const m = legs[k].minutes;
     if (t < m) return nodeD(k) + (nodeD(k + 1) - nodeD(k)) * (t / m);
     t -= m;
   }
-  if (t < 20) return nodeD(SUMMIT_NODE);
+  if (t < 20) return nodeD(summit);
   t -= 20;
-  for (let k = SUMMIT_NODE; k > MUIR; k--) {
-    const m = LEGS[k - 1].minutes * 0.5;
+  for (let k = summit; k > camp; k--) {
+    const m = legs[k - 1].minutes * 0.5;
     if (t < m) return nodeD(k) - (nodeD(k) - nodeD(k - 1)) * (t / m);
     t -= m;
   }
-  return null; // back at Muir
+  return null; // back in camp
 }
-
-const ROUTE_CUM_LOCAL: number[] = (() => {
-  const out = [0];
-  for (let i = 1; i < ROUTE.pts.length; i++) {
-    out.push(out[i - 1] + Math.hypot(ROUTE.pts[i][0] - ROUTE.pts[i - 1][0], ROUTE.pts[i][2] - ROUTE.pts[i - 1][2]));
-  }
-  return out;
-})();
 
 function glowTexture() {
   const n = 64;
@@ -544,12 +559,13 @@ function glowTexture() {
 }
 
 /** Other parties on the route: small figures by day, a string of headlamps by night. */
-function OtherTeams({ clock, night, player }: {
+function OtherTeams({ teams, clock, night, player }: {
+  teams: number[];
   clock: number;
   night: React.MutableRefObject<number>;
   player: React.MutableRefObject<THREE.Vector3>;
 }) {
-  const count = TEAM_STARTS.length * TEAM_SIZE;
+  const count = teams.length * TEAM_SIZE;
   const { bodies, lamps } = useMemo(() => {
     // Distant figures: a slim silhouette is all you see of another party.
     const geo = new THREE.CapsuleGeometry(0.19, 1.3, 4, 8);
@@ -576,7 +592,7 @@ function OtherTeams({ clock, night, player }: {
   useFrame(() => {
     const lit = night.current > 0.35;
     let k = 0;
-    TEAM_STARTS.forEach((start) => {
+    teams.forEach((start) => {
       const lead = teamDist(latest.current, start);
       for (let j = 0; j < TEAM_SIZE; j++, k++) {
         const lamp = lamps[k];
@@ -785,8 +801,29 @@ function fogFor(weather: Weather) {
 
 function World(props: SceneProps) {
   const season = props.season ?? 'july';
-  useSceneSeason(season);
-  const { scene, camera, size } = useThree();
+  const routeId = props.route ?? 'dc';
+  useSceneSetup(season, routeId);
+  const { scene, camera, size, gl } = useThree();
+  const shotRef = props.shot;
+  useEffect(() => {
+    if (!shotRef) return;
+    // Render a fresh frame and read it straight back, before the buffer is presented and cleared.
+    shotRef.current = async () => {
+      try {
+        gl.render(scene, camera);
+        if (Platform.OS === 'web') {
+          const canvas = (gl.getContext() as WebGLRenderingContext).canvas as HTMLCanvasElement;
+          return canvas.toDataURL('image/jpeg', 0.72);
+        }
+        const snap = await GLView.takeSnapshotAsync(gl.getContext() as never, { format: 'jpeg', compress: 0.72 });
+        return typeof snap.uri === 'string' ? snap.uri : null;
+      } catch (e) {
+        console.warn('Summit photo failed', e);
+        return null;
+      }
+    };
+    return () => { shotRef.current = null; };
+  }, [shotRef, gl, scene, camera]);
   const motion = useRef<Motion>({ walking: false, phase: 0 });
   const partnerMotion = useRef<Motion>({ walking: false, phase: 1.5 });
   const climber = useRef<THREE.Group>(null);
@@ -1093,7 +1130,9 @@ function World(props: SceneProps) {
       {patch && <DetailPatch patch={patch} />}
       <RouteTrack highlight={routeHighlight} />
       <RouteMarkers wands={props.wands} patchId={patch ? patch.cx * 1e5 + patch.cz : 0} />
-      {follow && <OtherTeams clock={props.clock} night={night} player={playerPos} />}
+      {follow && sceneDay.route.teams > 0 && (
+        <OtherTeams key={routeId} teams={TEAM_STARTS.slice(0, sceneDay.route.teams)} clock={props.clock} night={night} player={playerPos} />
+      )}
       <CloudSea amount={clouds} />
       <SkyClouds amount={cumulus} />
       <Snowfall intensity={snow} center={camTarget} />

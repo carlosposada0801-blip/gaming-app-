@@ -1,7 +1,5 @@
 import { useEffect, useRef } from 'react';
-import { NODE_DIST } from '../game/data/routeProfile';
-import { elevAt, roped } from '../game/engine';
-import { MUIR } from '../game/route';
+import { elevAt, profileOf, roped, routeOf } from '../game/engine';
 import { legAt } from '../game/movement';
 import { SEASONS } from '../game/season';
 import type { GameState, Pace } from '../game/types';
@@ -16,9 +14,10 @@ const M_TO_FT = 3.28084;
  * season's snowline, the dirt trail.
  */
 export function surfaceAt(s: GameState): Surface {
-  const leg = legAt(s.dist);
-  const ft = elevAt(s.dist) * M_TO_FT;
-  if (leg === 3 || (leg === 2 && ft > 10300 && ft < 10700)) return 'rock';
+  const leg = legAt(s);
+  const terrain = routeOf(s).legs[leg].terrain;
+  const ft = elevAt(s) * M_TO_FT;
+  if (terrain === 'cleaver' || terrain === 'ridge' || (terrain === 'gap' && ft > 10300 && ft < 10700)) return 'rock';
   if (ft < SEASONS[s.season].snowlineFt) return 'dirt';
   return 'snow';
 }
@@ -58,7 +57,7 @@ export function useClimbAudio(opts: {
 
   // Ambience.
   useEffect(() => {
-    const elev = elevAt(state.dist);
+    const elev = elevAt(state);
     const alt = Math.max(0, Math.min(1, (elev - 1600) / 2800));
     const w = state.weather;
     const weatherWind = w === 'storm' ? 0.55 : w === 'windy' ? 0.4 : w === 'coldsnap' ? 0.3 : w === 'whiteout' ? 0.25 : 0;
@@ -101,7 +100,7 @@ export function useClimbAudio(opts: {
       if (nextClink <= 0) {
         nextClink = 4 + Math.random() * 8;
         const s = stateRef.current;
-        if (roped(s) && s.dist > NODE_DIST[MUIR]) sound.shot(Math.random() < 0.7 ? 'clink' : 'rope', 0.35);
+        if (roped(s) && s.dist > profileOf(s).nodeDist[routeOf(s).camp]) sound.shot(Math.random() < 0.7 ? 'clink' : 'rope', 0.35);
         else sound.shot('clink', 0.2); // poles and the axe on your pack
       }
       raf = requestAnimationFrame(tick);

@@ -1,5 +1,13 @@
 import { GEAR_BY_ID } from './gear';
+import { PROFILES } from './data/routeProfile';
+import { ROUTES } from './routes';
 import type { GameState } from './types';
+
+/** The route this climb is on, and its terrain profile. */
+export const routeOf = (s: GameState) => ROUTES[s.route];
+export const profileOf = (s: GameState) => PROFILES[s.route];
+/** Index of the summit stop (Columbia Crest) on this route. */
+export const summitOf = (s: GameState) => ROUTES[s.route].nodes.length - 1;
 
 export function has(s: GameState, id: string) {
   if (!s.packed.includes(id)) return false;

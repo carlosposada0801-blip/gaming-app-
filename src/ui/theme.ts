@@ -1,6 +1,6 @@
 import { packWeightLb } from '../game/gear';
-import { has } from '../game/helpers';
-import { MUIR } from '../game/route';
+import { has, routeOf } from '../game/helpers';
+import { partnerHas } from '../game/partners';
 import type { GameState } from '../game/types';
 import type { ClimberLook } from '../scene/Climber';
 
@@ -23,8 +23,14 @@ export const C = {
 
 export const NUM = { fontVariant: ['tabular-nums' as const] };
 
+/** Past high camp, or leaving it on summit day: helmets, harnesses and crampons on. */
+const aboveCamp = (s: GameState) => {
+  const camp = routeOf(s).camp;
+  return s.node >= camp && !(s.node === camp && !s.slept && s.dir === 'up');
+};
+
 export function climberLook(s: GameState): ClimberLook {
-  const above = s.node >= MUIR && !(s.node === MUIR && !s.slept && s.dir === 'up');
+  const above = aboveCamp(s);
   let jacket = '#4a6fa5';
   let bulky = false;
   if (s.layer >= 1 && (has(s, 'fleece') || has(s, 'cotton'))) jacket = has(s, 'fleece') ? '#3f7d5c' : '#8a8f96';
@@ -47,11 +53,11 @@ export function climberLook(s: GameState): ClimberLook {
 }
 
 export function partnerLook(s: GameState): ClimberLook {
-  const above = s.node >= MUIR && !(s.node === MUIR && !s.slept && s.dir === 'up');
+  const above = aboveCamp(s);
   return {
-    jacket: s.layer >= 3 ? '#4f8fd6' : '#6b4aa8',
+    jacket: s.partner === 'guide' ? '#1f6f5c' : s.layer >= 3 ? '#4f8fd6' : '#6b4aa8',
     bulky: s.layer >= 3,
-    helmet: above,
+    helmet: above && partnerHas(s, 'helmet'),
     glasses: true,
     headlamp: true,
     axe: above,

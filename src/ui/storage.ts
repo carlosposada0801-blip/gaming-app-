@@ -1,5 +1,6 @@
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import type { EndingId } from '../game/types';
+import { EMPTY_PROFILE, type Profile } from '../game/profile';
 
 const BEST_KEY = 'summit-rainier/best';
 
@@ -42,4 +43,20 @@ export async function loadSoundOn(): Promise<boolean> {
 
 export function saveSoundOn(on: boolean) {
   AsyncStorage.setItem(SOUND_KEY, on ? 'on' : 'off').catch(() => {});
+}
+
+const PROFILE_KEY = 'summit-rainier/profile';
+
+/** Your logbook, skills, badges and streaks. */
+export async function loadProfile(): Promise<Profile> {
+  try {
+    const raw = await AsyncStorage.getItem(PROFILE_KEY);
+    return raw ? { ...EMPTY_PROFILE, ...(JSON.parse(raw) as Profile) } : EMPTY_PROFILE;
+  } catch {
+    return EMPTY_PROFILE;
+  }
+}
+
+export function saveProfile(p: Profile) {
+  AsyncStorage.setItem(PROFILE_KEY, JSON.stringify(p)).catch(() => {});
 }
