@@ -465,7 +465,7 @@ export const EVENTS: EventDef[] = [
     title: 'Steep ice',
     chance: (s, c) => (c.dir === 'up' && hz(s, c).ice ? 1 : 0),
     text: (s) =>
-      `The ${routeOf(s).legs[s.node - 1]?.name ?? 'ice'} rears up: hard, grey-blue ice at forty-some degrees. Kicking steps won’t work here. It takes front points and picks, and a fall won’t stop on its own.`,
+      `${(routeOf(s).legs[s.node - 1]?.name ?? 'the ice').replace(/^(the )?/i, 'The ')} is hard, grey-blue ice at forty-some degrees. Kicking steps won’t work here. It takes front points and picks, and a fall won’t stop on its own.`,
     choices: (s) => [
       req(has(s, 'tool') && (has(s, 'screws') || partnerHas(s, 'screws')), 'Two tools, front points, and screws for protection', 'a second ice tool and ice screws',
         () => ({ text: 'Pitch by pitch, a screw every rope length. Slow, cold, and solid.', minutes: 45, delta: { stamina: -10, warmth: -6 }, tone: 'good' })),

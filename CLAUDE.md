@@ -169,8 +169,11 @@ See AGENTS.md for Expo rules (use `npx expo install`, check versioned docs).
   feet 42-97%; budget (hiking boots, alu crampons, no mitts) July 56% summit with 25% frostnip toes,
   May/Sept 0% (slow, cold feet, turnaround). Cautious ~97% retreat. `npm run sim -- --season may`.
 - Phase 4a Replayability on Rainier: DONE (routes, seeds + Daily Climb, partners, skills, badges, logbook with
-  summit photo, guided and hardcore). Sim numbers in the commit message / latest report. `--route all`,
-  `--partner veteran|friend|firstTimer`.
+  summit photo, guided and hardcore). Sim (smart, partner Ash, summit / bad endings): DC May 70 / 1.4,
+  July 86.6 / 1.2, Sept 78.6 / 1.6; July Emmons 80.4 / 0.8, Kautz 85.7 / 4.9, Liberty 78.6 / 7.5. July DC with
+  Jordan 80.8%, with Riley 67.6% (Riley's falls and altitude). Careless 0-28% summit, 54-98% bad endings.
+  Smart got stronger in 4a (lookahead now values progress, Ash gets altitude sickness less).
+  `--route all`, `--partner veteran|friend|firstTimer`.
 - Phase 4b Career mode (planned): training hikes (Mt. Si, Camp Muir day hike), snow school (unlocks
   self-arrest), Mount St. Helens, Adams, Baker (each needs its own terrain data), money, shop, gear wear.
 
